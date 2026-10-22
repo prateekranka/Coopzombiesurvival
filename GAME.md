@@ -396,7 +396,14 @@ Each chapter hides one short competitive mini-game. The Duck has a scoreboard th
 
 ## 8. Look and sound
 
-- **Art direction:** to be chosen from the look book (Lit Diorama, Pixel Abyss, Riso Flood or Ink Wobble). The default for now is **Lit Diorama**: a 2.5D side view, low-poly shapes, real light and fog, a blue night outside and warm light inside (as in ROUTE).
+- **Art direction: Ink Wobble** (chosen). A hand-drawn storybook with a dark streak:
+  - thick dark outlines that "boil" (redraw with small random wobble 8 times a second),
+  - big heads, lanky zombies with button eyes and stitched mouths, crooked buildings,
+  - muted sepia and green colours, a paper grain over everything,
+  - cross-hatching for darkness: the deeper or darker a place, the denser the lines; light (lamps, beams) cuts the hatching away,
+  - characters move at 12 frames a second for a hand-animated feel; the camera and physics stay smooth.
+  - Palette: storm sky `#CFC09A`, shallow water `#78A39C`, deep `#263C3E`, brass `#D8A048`, zombie `#8FA58A`, ink line `#1D1712`.
+  - Shapes are built in code as vector polygons, so we need very little drawn art. See the look book sketch "Ink Wobble".
 - **Placeholder art first:** capsules, boxes and flat colours. All gameplay must read without final art.
 - **Sound on iOS:** sound starts only after the first tap. Make "Tap to start" the title screen.
 - **Key sounds:** pump strokes, breathing when air is low, the hose creaking when it snags, zombie groans with direction, radio static.
@@ -444,9 +451,9 @@ Each chapter hides one short competitive mini-game. The Duck has a scoreboard th
 ## 11. Tech stack (proposed, confirm before scaffolding)
 
 - **TypeScript + Vite.**
-- **Three.js** for a 2.5D look. Use its WebGPU renderer, which falls back to WebGL2 when WebGPU is missing. Write effects in TSL so they run on both. Do not write raw WebGPU.
+- **Three.js** for rendering. Ink Wobble is drawn as flat vector shapes with an outline and wobble effect, so WebGPU is a bonus, not a need. Use its WebGPU renderer, which falls back to WebGL2 when WebGPU is missing. Write effects in TSL so they run on both. Do not write raw WebGPU.
 - **Rapier 2D (WebAssembly)** for physics, on the host only. Links are rope chains built from physics joints, or a custom rope if joints are not stable enough.
-- **Cloudflare Workers + Durable Objects** for rooms, relay and saves.
+- **Cloudflare Workers + Durable Objects** for rooms, relay and saves. Account: prateek.ranka@gmail.com. Deploys use an API token stored as the environment variable `CLOUDFLARE_API_TOKEN` (never in the repo).
 - **PWA:** add to the Home Screen for full screen.
 - **Tests:** Vitest for unit tests. Playwright for end-to-end tests, with two browser contexts at iPad size (1180 × 820) that play a scripted session.
 - **Versions:** pin exact library versions when you scaffold the repo.
@@ -539,8 +546,6 @@ Working rules:
 
 ## 15. Open questions
 
-- Which art direction? (See the look book. The default is Lit Diorama.)
 - Do we keep the names Wren, Cass, Pip and The Duck?
 - Confirm the tech stack in section 11.
-- Who owns the Cloudflare account for the server and the saves?
 - Is voice acting needed later? Text only for now.
