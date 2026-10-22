@@ -1,0 +1,373 @@
+:root {
+  --sky: #cfc09a;
+  --shallow: #78a39c;
+  --deep: #263c3e;
+  --brass: #d8a048;
+  --ink: #1d1712;
+  --paper: #efe6cf;
+  --wren: #ff9f43;
+  --cass: #4aa3ff;
+  font-family: ui-rounded, "SF Pro Rounded", system-ui, -apple-system, sans-serif;
+  color: var(--ink);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--ink);
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+#game {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+#ui {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+}
+
+#ui > * {
+  pointer-events: auto;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.screen {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 12px;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  background: var(--sky);
+}
+
+.title .logo {
+  margin: 0;
+  font-size: clamp(56px, 12vw, 128px);
+  letter-spacing: 0.08em;
+  color: var(--ink);
+  text-shadow: 4px 4px 0 var(--brass);
+}
+
+.title .tagline {
+  margin: 0;
+  font-size: 20px;
+}
+
+.title .tap {
+  margin-top: 32px;
+  font-size: 24px;
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.card {
+  display: grid;
+  gap: 14px;
+  width: min(420px, calc(100vw - 32px));
+  padding: 28px;
+  border: 4px solid var(--ink);
+  border-radius: 20px;
+  background: var(--paper);
+  box-shadow: 6px 6px 0 var(--ink);
+}
+
+.card h2 {
+  margin: 0 0 4px;
+  font-size: 28px;
+}
+
+.big {
+  min-height: 64px;
+  padding: 0 20px;
+  font-size: 22px;
+  font-weight: 700;
+  border: 3px solid var(--ink);
+  border-radius: 14px;
+  background: var(--paper);
+}
+
+.big.primary {
+  background: var(--brass);
+}
+
+.big:disabled {
+  opacity: 0.5;
+}
+
+.small {
+  min-height: 48px;
+  font-size: 17px;
+  border: 2px dashed var(--ink);
+  border-radius: 12px;
+  background: transparent;
+}
+
+.join {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+}
+
+.code {
+  min-width: 0;
+  min-height: 64px;
+  padding: 0 14px;
+  font: inherit;
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: 0.3em;
+  text-align: center;
+  text-transform: uppercase;
+  border: 3px solid var(--ink);
+  border-radius: 14px;
+  background: #fff;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.status {
+  min-height: 1.2em;
+  margin: 0;
+  font-size: 16px;
+}
+
+.hud {
+  position: absolute;
+  inset: 0;
+  pointer-events: none !important;
+  padding: max(12px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 12px max(16px, env(safe-area-inset-left));
+}
+
+.pill {
+  position: absolute;
+  top: max(12px, env(safe-area-inset-top));
+  padding: 8px 14px;
+  font-size: 17px;
+  font-weight: 700;
+  border: 3px solid var(--ink);
+  border-radius: 999px;
+  background: var(--paper);
+}
+
+.room {
+  left: max(16px, env(safe-area-inset-left));
+  letter-spacing: 0.08em;
+}
+
+.partner {
+  right: max(16px, env(safe-area-inset-right));
+}
+
+.partner[data-player="0"] {
+  border-color: var(--wren);
+}
+
+.partner[data-player="1"] {
+  border-color: var(--cass);
+}
+
+.partner[data-linked="false"] {
+  opacity: 0.7;
+  border-style: dashed;
+}
+
+.objective {
+  position: absolute;
+  top: calc(max(12px, env(safe-area-inset-top)) + 52px);
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 16px;
+  padding: 4px 12px;
+  border-radius: 8px;
+  background: rgb(239 230 207 / 0.8);
+}
+
+.partner-arrow {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+}
+
+.partner-arrow .tip {
+  position: absolute;
+  left: -14px;
+  top: -14px;
+  width: 28px;
+  height: 28px;
+  clip-path: polygon(100% 50%, 0 0, 25% 50%, 0 100%);
+  background: var(--wren);
+}
+
+.partner-arrow[data-player="1"] .tip {
+  background: var(--cass);
+}
+
+.partner-arrow .dist {
+  position: absolute;
+  top: 16px;
+  left: -24px;
+  width: 48px;
+  text-align: center;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+/* Touch controls. GAME.md section 7. */
+.touch {
+  position: absolute;
+  inset: 0;
+  pointer-events: none !important;
+}
+
+.stick-zone {
+  position: absolute;
+  inset: 0 50% 0 0;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.stick-base {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  opacity: 0;
+}
+
+.stick-base.active {
+  opacity: 1;
+}
+
+.stick-base::before {
+  content: "";
+  position: absolute;
+  left: -64px;
+  top: -64px;
+  width: 128px;
+  height: 128px;
+  border: 3px solid rgb(29 23 18 / 0.5);
+  border-radius: 50%;
+  background: rgb(239 230 207 / 0.25);
+}
+
+.stick-knob {
+  position: absolute;
+  left: -30px;
+  top: -30px;
+  width: 60px;
+  height: 60px;
+}
+
+.stick-knob::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 3px solid var(--ink);
+  border-radius: 50%;
+  background: rgb(239 230 207 / 0.8);
+}
+
+.buttons {
+  position: absolute;
+  right: max(24px, env(safe-area-inset-right));
+  bottom: max(24px, env(safe-area-inset-bottom));
+  width: 260px;
+  height: 240px;
+  pointer-events: none;
+}
+
+.btn {
+  position: absolute;
+  pointer-events: auto;
+  touch-action: none;
+  font-size: 16px;
+  font-weight: 700;
+  border: 3px solid var(--ink);
+  border-radius: 50%;
+  background: rgb(239 230 207 / 0.85);
+}
+
+.btn.down {
+  background: var(--brass);
+  transform: scale(0.94);
+}
+
+.btn-jump {
+  right: 0;
+  bottom: 0;
+  width: 112px;
+  height: 112px;
+  font-size: 20px;
+}
+
+.btn-attack {
+  right: 124px;
+  bottom: 8px;
+  width: 84px;
+  height: 84px;
+}
+
+.btn-use {
+  right: 16px;
+  bottom: 124px;
+  width: 80px;
+  height: 80px;
+}
+
+.btn-signal {
+  right: 112px;
+  bottom: 148px;
+  width: 60px;
+  height: 60px;
+  font-size: 14px;
+}
+
+@media (orientation: portrait) and (pointer: coarse) {
+  body::after {
+    content: "Turn your iPad sideways";
+    position: fixed;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--ink);
+    background: var(--sky);
+    z-index: 10;
+  }
+}

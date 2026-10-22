@@ -1,0 +1,346 @@
+import { getLevel } from "@lifeline/content";
+import {
+  MsgType,
+  decodeInput,
+  decodeSnapshot,
+  encodeInput,
+  encodeSnapshot,
+  messageType,
+  seqNewer,
+  type Snapshot,
+} from "@lifeline/protocol";
+import {
+  DT,
+  NO_INPUT,
+  TICK_RATE,
+  createWorld,
+  stepPlayer,
+  stepWorld,
+  type InputFrame,
+  type PlayerId,
+  type PlayerState,
+  type World,
+} from "@lifeline/sim";
+import type { InputSource } from "./input";
+import { NetClient, type NetStatus } from "./net";
+
+// The three ways to play: host (runs the sim), guest (predicts itself, interpolates the rest)
+// and local (both players in one browser, no server). GAME.md section 10.
+
+export const LEVEL_ID = "m0-test-room";
+const TICK_MS = 1000 / TICK_RATE;
+/** The guest shows the host's world this far in the past, in ticks (100 ms). */
+const INTERP_DELAY_TICKS = 3;
+const SNAPSHOT_BUFFER = 32;
+const MAX_QUEUED_GUEST_INPUTS = 4;
+/** Ticks run at once after a slow frame. Past this (half a second), the sim skips ahead. */
+const MAX_CATCH_UP = 15;
+
+export interface ViewPlayer {
+  id: PlayerId;
+  x: number;
+  y: number;
+  facing: 1 | -1;
+}
+
+export interface SessionStatus {
+  mode: "local" | "host" | "guest";
+  net: NetStatus | "local";
+  peer: boolean;
+  code?: string;
+}
+
+export interface Session {
+  readonly world: World;
+  /** The player this screen follows. */
+  readonly localId: PlayerId;
+  view(now: number): ViewPlayer[];
+  status(): SessionStatus;
+  dispose(): void;
+}
+
+class FixedTicker {
+  private acc = 0;
+  private last = performance.now();
+  private lastTickAt = this.last;
+  private readonly timer: ReturnType<typeof setInterval>;
+
+  constructor(step: () => void) {
+    this.timer = setInterval(() => {
+      const now = performance.now();
+      this.acc += now - this.last;
+      this.last = now;
+      let steps = 0;
+      while (this.acc >= TICK_MS && steps < MAX_CATCH_UP) {
+        step();
+        this.acc -= TICK_MS;
+        steps++;
+      }
+      // After a long stall (a background tab), skip ahead instead of fast-forwarding.
+      if (steps === MAX_CATCH_UP) this.acc = 0;
+      if (steps > 0) this.lastTickAt = now - this.acc;
+    }, 4);
+  }
+
+  /** How far the render time is between the last two ticks, 0 to 1. */
+  alpha(now: number): number {
+    return Math.min(1, Math.max(0, (now - this.lastTickAt) / TICK_MS));
+  }
+
+  stop() {
+    clearInterval(this.timer);
+  }
+}
+
+const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+
+function lerpPlayer(a: PlayerState | ViewPlayer, b: PlayerState | ViewPlayer, t: number): ViewPlayer {
+  return { id: b.id, x: lerp(a.x, b.x, t), y: lerp(a.y, b.y, t), facing: b.facing };
+}
+
+const snapshotOf = (players: readonly PlayerState[]): ViewPlayer[] =>
+  players.map((p) => ({ id: p.id, x: p.x, y: p.y, facing: p.facing }));
+
+function frameFrom(source: InputSource, seq: number): InputFrame {
+  const s = source.sample();
+  return { seq, moveX: s.moveX, moveY: s.moveY, buttons: s.buttons };
+}
+
+export class LocalSession implements Session {
+  readonly world = createWorld(getLevel(LEVEL_ID));
+  readonly localId: PlayerId = 0;
+  private prev = snapshotOf(this.world.state.players);
+  private readonly ticker: FixedTicker;
+
+  constructor(sources: [InputSource, InputSource]) {
+    this.ticker = new FixedTicker(() => {
+      this.prev = snapshotOf(this.world.state.players);
+      stepWorld(this.world, [frameFrom(sources[0], 0), frameFrom(sources[1], 0)]);
+    });
+  }
+
+  view(now: number): ViewPlayer[] {
+    const t = this.ticker.alpha(now);
+    return this.world.state.players.map((p, i) => lerpPlayer(this.prev[i]!, p, t));
+  }
+
+  status(): SessionStatus {
+    return { mode: "local", net: "local", peer: true };
+  }
+
+  dispose() {
+    this.ticker.stop();
+  }
+}
+
+export class HostSession implements Session {
+  readonly world = createWorld(getLevel(LEVEL_ID));
+  readonly localId: PlayerId = 0;
+  private prev = snapshotOf(this.world.state.players);
+  private readonly ticker: FixedTicker;
+  private readonly net: NetClient;
+  private guestInputs: InputFrame[] = [];
+  private lastGuestInput: InputFrame = NO_INPUT;
+  private ack = 0;
+  private peer = false;
+  private netStatus: NetStatus = "connecting";
+
+  constructor(
+    readonly code: string,
+    source: InputSource,
+    name: string,
+  ) {
+    this.net = new NetClient(code, "host", {
+      onWelcome: (msg) => {
+        this.peer = msg.peerPresent;
+        this.net.send({ t: "hello", name });
+        if (!msg.save) this.net.send({ t: "save", data: newSave() });
+      },
+      onPeer: (present) => {
+        this.peer = present;
+        if (present) this.net.send({ t: "hello", name });
+        else {
+          this.guestInputs = [];
+          this.lastGuestInput = NO_INPUT;
+        }
+      },
+      onControl: () => {},
+      onBinary: (buf) => {
+        if (messageType(buf) !== MsgType.Input) return;
+        this.guestInputs.push(decodeInput(buf));
+        // If the guest runs ahead, drop old inputs so its lag does not grow.
+        if (this.guestInputs.length > MAX_QUEUED_GUEST_INPUTS) this.guestInputs.shift();
+      },
+      onStatus: (s) => (this.netStatus = s),
+    });
+
+    this.ticker = new FixedTicker(() => {
+      this.prev = snapshotOf(this.world.state.players);
+      const next = this.guestInputs.shift();
+      if (next) {
+        this.ack = next.seq;
+        this.lastGuestInput = next;
+      }
+      stepWorld(this.world, [frameFrom(source, 0), this.peer ? this.lastGuestInput : NO_INPUT]);
+      // 20 snapshots a second: send on 2 of every 3 ticks.
+      if (this.world.state.tick % 3 !== 0) this.net.send(encodeSnapshot(this.world.state, this.ack));
+    });
+  }
+
+  view(now: number): ViewPlayer[] {
+    const t = this.ticker.alpha(now);
+    return this.world.state.players.map((p, i) => lerpPlayer(this.prev[i]!, p, t));
+  }
+
+  status(): SessionStatus {
+    return { mode: "host", net: this.netStatus, peer: this.peer, code: this.code };
+  }
+
+  dispose() {
+    this.ticker.stop();
+    this.net.close();
+  }
+}
+
+export class GuestSession implements Session {
+  readonly world = createWorld(getLevel(LEVEL_ID));
+  readonly localId: PlayerId = 1;
+  private own: PlayerState = { ...this.world.state.players[1] };
+  private prevOwn: ViewPlayer = { ...this.own };
+  private history: InputFrame[] = [];
+  private seq = 0;
+  private snapshots: Snapshot[] = [];
+  private latestAt = 0;
+  private synced = false;
+  /** Visual-only offset that hides prediction corrections, decays to zero. */
+  private correction = { x: 0, y: 0 };
+  private lastView = 0;
+  private peer = false;
+  private netStatus: NetStatus = "connecting";
+  private readonly ticker: FixedTicker;
+  private readonly net: NetClient;
+
+  constructor(
+    readonly code: string,
+    source: InputSource,
+    name: string,
+  ) {
+    this.net = new NetClient(code, "guest", {
+      onWelcome: (msg) => {
+        this.peer = msg.peerPresent;
+        this.net.send({ t: "hello", name });
+      },
+      onPeer: (present) => {
+        this.peer = present;
+        if (present) this.net.send({ t: "hello", name });
+        // A new host starts a fresh sim, so forget the old one.
+        else this.synced = false;
+      },
+      onControl: () => {},
+      onBinary: (buf) => {
+        if (messageType(buf) === MsgType.Snapshot) this.onSnapshot(decodeSnapshot(buf));
+      },
+      onStatus: (s) => (this.netStatus = s),
+    });
+
+    this.ticker = new FixedTicker(() => {
+      if (!this.synced || !this.net.isOpen) return;
+      this.seq = (this.seq + 1) & 0xffff;
+      const frame = frameFrom(source, this.seq);
+      this.history.push(frame);
+      this.prevOwn = { ...this.own };
+      stepPlayer(this.own, frame, this.world.solids);
+      this.net.send(encodeInput(frame));
+    });
+  }
+
+  private onSnapshot(s: Snapshot) {
+    const last = this.snapshots.at(-1);
+    if (last && s.tick <= last.tick) {
+      // The host restarted its sim (a new host): start over.
+      if (last.tick - s.tick < 30) return;
+      this.snapshots = [];
+      this.synced = false;
+    }
+    this.snapshots.push(s);
+    if (this.snapshots.length > SNAPSHOT_BUFFER) this.snapshots.shift();
+    this.latestAt = performance.now();
+    this.world.state.tick = s.tick;
+
+    const auth = s.players.find((p) => p.id === this.localId);
+    if (!auth) return;
+    this.history = this.history.filter((h) => seqNewer(h.seq, s.ack));
+    if (!this.synced) {
+      this.synced = true;
+      this.history = [];
+      this.own = { ...auth };
+      this.prevOwn = { ...auth };
+      return;
+    }
+    const before = { x: this.own.x, y: this.own.y };
+    this.own = { ...auth };
+    for (const h of this.history) stepPlayer(this.own, h, this.world.solids);
+    this.correction.x += before.x - this.own.x;
+    this.correction.y += before.y - this.own.y;
+    // A big error is a teleport, not jitter: snap.
+    if (Math.hypot(this.correction.x, this.correction.y) > 2) this.correction = { x: 0, y: 0 };
+    this.world.state.players[this.localId] = this.own;
+  }
+
+  view(now: number): ViewPlayer[] {
+    const dt = this.lastView ? (now - this.lastView) / 1000 : 0;
+    this.lastView = now;
+    const decay = Math.exp(-dt * 12);
+    this.correction.x *= decay;
+    this.correction.y *= decay;
+
+    const ownView = lerpPlayer(this.prevOwn, this.own, this.ticker.alpha(now));
+    ownView.x += this.correction.x;
+    ownView.y += this.correction.y;
+
+    const latest = this.snapshots.at(-1);
+    if (!latest) return [ownView];
+    const renderTick = latest.tick + (now - this.latestAt) / 1000 / DT - INTERP_DELAY_TICKS;
+    const others: ViewPlayer[] = [];
+    for (const p of latest.players) {
+      if (p.id === this.localId) continue;
+      others.push(this.interpolate(p.id, renderTick) ?? p);
+    }
+    return [...others, ownView].sort((a, b) => a.id - b.id);
+  }
+
+  private interpolate(id: PlayerId, tick: number): ViewPlayer | undefined {
+    for (let i = this.snapshots.length - 1; i > 0; i--) {
+      const b = this.snapshots[i]!;
+      const a = this.snapshots[i - 1]!;
+      if (a.tick > tick) continue;
+      const pa = a.players.find((p) => p.id === id);
+      const pb = b.players.find((p) => p.id === id);
+      if (!pa || !pb) return undefined;
+      const t = Math.min(1, (tick - a.tick) / Math.max(1, b.tick - a.tick));
+      return lerpPlayer(pa, pb, t);
+    }
+    const first = this.snapshots[0]?.players.find((p) => p.id === id);
+    return first && { ...first };
+  }
+
+  status(): SessionStatus {
+    return { mode: "guest", net: this.netStatus, peer: this.peer && this.synced, code: this.code };
+  }
+
+  dispose() {
+    this.ticker.stop();
+    this.net.close();
+  }
+}
+
+/** The Duck save, first pass. GAME.md section 9. Game data only, never physics state. */
+function newSave() {
+  return {
+    saveVersion: 1,
+    chapter: 0,
+    checkpoint: "cp1",
+    players: { wren: { name: "Wren" }, cass: { name: "Cass" } },
+    createdAt: new Date().toISOString(),
+  };
+}

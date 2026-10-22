@@ -448,7 +448,7 @@ Each chapter hides one short competitive mini-game. The Duck has a scoreboard th
   - If the host drops, the game pauses. Either iPad can host again from the last checkpoint.
 - **Development mode:** one browser can run both players (keyboard plus a gamepad), with no server.
 
-## 11. Tech stack (proposed, confirm before scaffolding)
+## 11. Tech stack (confirmed)
 
 - **TypeScript + Vite.**
 - **Three.js** for rendering. Ink Wobble is drawn as flat vector shapes with an outline and wobble effect, so WebGPU is a bonus, not a need. Use its WebGPU renderer, which falls back to WebGL2 when WebGPU is missing. Write effects in TSL so they run on both. Do not write raw WebGPU.
@@ -456,7 +456,11 @@ Each chapter hides one short competitive mini-game. The Duck has a scoreboard th
 - **Cloudflare Workers + Durable Objects** for rooms, relay and saves. Account: prateek.ranka@gmail.com. Deploys use an API token stored as the environment variable `CLOUDFLARE_API_TOKEN` (never in the repo).
 - **PWA:** add to the Home Screen for full screen.
 - **Tests:** Vitest for unit tests. Playwright for end-to-end tests, with two browser contexts at iPad size (1180 × 820) that play a scripted session.
-- **Versions:** pin exact library versions when you scaffold the repo.
+- **Versions:** pinned exactly in each `package.json`: TypeScript 7.0.2, Vite 8.3.5, Three.js 0.186.1, Vitest 5.0.5, Playwright 1.64.1, Wrangler 4.151.3.
+- **One deploy:** a single Worker named `lifeline` serves the built client as static assets and handles `/api/*` (rooms and the WebSocket relay). URL: `https://lifeline.prateekranka.workers.dev`.
+- **M0 notes:**
+  - M0 moves capsules with a small kinematic controller in `packages/sim` (boxes only). Rapier comes in M1 with the hose.
+  - Snapshots are quantized full snapshots (40 bytes for two players). Deltas come when the entity count grows.
 
 ## 12. Repository layout
 
@@ -546,6 +550,9 @@ Working rules:
 
 ## 15. Open questions
 
-- Do we keep the names Wren, Cass, Pip and The Duck?
-- Confirm the tech stack in section 11.
 - Is voice acting needed later? Text only for now.
+
+Decided by default (2026-10-22, no answer given):
+- The names Wren, Cass, Pip and The Duck stay.
+- The tech stack in section 11 is confirmed as written.
+- The milestones in section 14 are used as drafted.
