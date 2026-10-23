@@ -88,10 +88,10 @@ describe("test room", () => {
     const world = settled();
     const p = world.state.players[0];
     // Run right and jump at each step up, like a player would.
-    const jumpAt = [6.8, 10.6, 16.6];
+    const jumpAt = [6.8, 10.6, 16.2];
     let hold = 0;
     let next = 0;
-    for (let i = 0; i < 300 && p.x < 22; i++) {
+    for (let i = 0; i < 300 && p.x < 21; i++) {
       if (hold > 0) hold--;
       else if (next < jumpAt.length && p.x >= jumpAt[next]! && p.grounded) {
         hold = 10;

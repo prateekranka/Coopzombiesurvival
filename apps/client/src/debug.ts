@@ -115,7 +115,7 @@ const REACH = 1.2;
 const gap = (x: number, s: Box) => (x < s.minX ? s.minX - x : x > s.maxX ? x - s.maxX : 0);
 
 /** A partner that stands still, follows you, or copies your input. */
-function bot(id: PlayerId, settings: DebugSettings, truth: () => World, you: InputSource): InputSource {
+export function bot(id: PlayerId, settings: DebugSettings, truth: () => World, you: InputSource): InputSource {
   let jumpHold = 0;
   let stuck = 0;
   return {
@@ -139,7 +139,11 @@ function bot(id: PlayerId, settings: DebugSettings, truth: () => World, you: Inp
           goalX = Math.min(Math.max(target.x, step.minX + 0.5), step.maxX - 0.5);
           slack = 0.2;
           const edge = gap(me.x, step);
-          climb = edge > 0 && edge < 1.4;
+          const dir = Math.sign(goalX - me.x);
+          // Jump when close, or when the next stride would walk off what it stands on.
+          const ahead = me.x + dir * 0.6;
+          const supported = world.solids.some((s) => s.maxY === me.y && ahead >= s.minX && ahead <= s.maxX);
+          climb = edge > 0 && (edge < 1.4 || !supported);
         }
       }
       const moveX = Math.abs(goalX - me.x) > slack ? Math.sign(goalX - me.x) : 0;
