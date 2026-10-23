@@ -277,6 +277,11 @@ Object.defineProperty(window, "__lifeline", {
     get authority() {
       return session?.world.state.players.map(({ id, x, y, vx, vy, grounded }) => ({ id, x, y, vx, vy, grounded }));
     },
+    get local() {
+      if (!(session instanceof DebugSession)) return undefined;
+      const { id, x, y, vx, vy, grounded } = session.localState;
+      return { id, x, y, vx, vy, grounded };
+    },
     get tick() {
       return session?.world.state.tick;
     },

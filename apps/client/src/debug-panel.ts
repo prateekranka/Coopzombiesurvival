@@ -299,7 +299,7 @@ export function createDebugPanel(root: HTMLElement, session: DebugSession, rende
         fpsAt = now;
       }
       if (!view.overlay) return;
-      const p = session.world.state.players[s.controlled];
+      const p = session.localState;
       const f = (n: number) => n.toFixed(2).padStart(6);
       const lines = [
         `${fps} fps · tick ${session.world.state.tick} · ${simClock.paused ? "PAUSED" : `${simClock.scale}×`} · ${renderer.backend}`,

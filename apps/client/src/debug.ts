@@ -1,6 +1,6 @@
 import { getLevel } from "@lifeline/content";
 import type { PeerMessage, Role } from "@lifeline/protocol";
-import { Button, createWorld, stepWorld, type Box, type PlayerId, type World } from "@lifeline/sim";
+import { Button, createWorld, stepWorld, type Box, type PlayerId, type PlayerState, type World } from "@lifeline/sim";
 import type { InputSample, InputSource } from "./input";
 import type { NetEvents } from "./net";
 import {
@@ -177,6 +177,12 @@ export class DebugSession implements Session {
   /** The host's world: the truth. */
   get world(): World {
     return this.solo?.world ?? this.host!.world;
+  }
+
+  /** Your player as this screen knows it: predicted when you play the guest. */
+  get localState(): PlayerState {
+    if (this.guest && this.settings.controlled === 1) return this.guest.stats.own;
+    return this.world.state.players[this.settings.controlled];
   }
 
   get guestStats() {
