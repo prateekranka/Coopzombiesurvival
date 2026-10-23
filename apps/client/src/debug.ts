@@ -1,6 +1,6 @@
 import { getLevel } from "@lifeline/content";
 import type { PeerMessage, Role } from "@lifeline/protocol";
-import { Button, createWorld, stepWorld, type PlayerId, type World } from "@lifeline/sim";
+import { Button, createWorld, stepWorld, type Box, type PlayerId, type World } from "@lifeline/sim";
 import type { InputSample, InputSource } from "./input";
 import type { NetEvents } from "./net";
 import {
@@ -10,6 +10,7 @@ import {
   LEVEL_ID,
   frameFrom,
   lerpPlayer,
+  simClock,
   snapshotOf,
   type Connect,
   type Session,
@@ -44,30 +45,40 @@ export const DEFAULT_DEBUG_SETTINGS: DebugSettings = {
   ghosts: true,
 };
 
-/** Two ends of an in-page link that behaves like the room relay, with delay. */
+/**
+ * Two ends of an in-page link that behaves like the room relay, with delay. Delay is counted in
+ * game time, so it stays right in slow motion and when stepping one tick at a time.
+ */
 function loopback(settings: DebugSettings): [Connect, Connect] {
-  const ends: { events?: NetEvents; open: boolean; lastAt: number }[] = [
+  type End = { events?: NetEvents; open: boolean; lastAt: number };
+  const ends: [End, End] = [
     { open: false, lastAt: 0 },
     { open: false, lastAt: 0 },
   ];
-  const timers = new Set<ReturnType<typeof setTimeout>>();
-  const later = (ms: number, fn: () => void) => {
-    const t = setTimeout(() => {
-      timers.delete(t);
-      fn();
-    }, ms);
-    timers.add(t);
-  };
+  const queue: { at: number; deliver: () => void }[] = [];
+  let users = 2;
+  const pump = setInterval(() => {
+    const now = simClock.now();
+    // Arrival times only grow per direction, but the two directions interleave.
+    while (true) {
+      const i = queue.findIndex((m) => m.at <= now);
+      if (i < 0) break;
+      queue.splice(i, 1)[0]!.deliver();
+    }
+  }, 4);
 
   const make = (me: 0 | 1, role: Role): Connect => (events) => {
-    const self = ends[me]!;
-    const peer = ends[1 - me]!;
+    const self = ends[me];
+    const peer = ends[me === 0 ? 1 : 0];
     self.events = events;
-    later(0, () => {
-      self.open = true;
-      events.onStatus("open");
-      events.onWelcome({ t: "welcome", role, code: "DBUG", peerPresent: peer.open, save: {} });
-      if (peer.open) peer.events?.onPeer(true);
+    queue.push({
+      at: simClock.now(),
+      deliver: () => {
+        self.open = true;
+        events.onStatus("open");
+        events.onWelcome({ t: "welcome", role, code: "DBUG", peerPresent: peer.open, save: {} });
+        if (peer.open) peer.events?.onPeer(true);
+      },
     });
     return {
       get isOpen() {
@@ -76,24 +87,32 @@ function loopback(settings: DebugSettings): [Connect, Connect] {
       send(data: ArrayBuffer | PeerMessage) {
         if (!self.open) return;
         if (!(data instanceof ArrayBuffer) && data.t === "save") return;
-        const now = performance.now();
-        const at = Math.max(peer.lastAt, now + settings.latency + Math.random() * settings.jitter);
+        // Like a WebSocket, messages keep their order: never arrive before the previous one.
+        const at = Math.max(peer.lastAt, simClock.now() + settings.latency + Math.random() * settings.jitter);
         peer.lastAt = at;
-        later(at - now, () => {
-          if (!peer.open || !peer.events) return;
-          if (data instanceof ArrayBuffer) peer.events.onBinary(data);
-          else peer.events.onControl(data);
+        queue.push({
+          at,
+          deliver: () => {
+            if (!peer.open || !peer.events) return;
+            if (data instanceof ArrayBuffer) peer.events.onBinary(data);
+            else peer.events.onControl(data);
+          },
         });
       },
       close() {
         self.open = false;
-        for (const t of timers) clearTimeout(t);
-        timers.clear();
+        if (--users === 0) clearInterval(pump);
       },
     };
   };
   return [make(0, "host"), make(1, "guest")];
 }
+
+/** Highest step the bot tries to jump onto, in metres. The default jump is 1.3 m. */
+const REACH = 1.2;
+
+/** Horizontal distance from x to a box, 0 when x is above it. */
+const gap = (x: number, s: Box) => (x < s.minX ? s.minX - x : x > s.maxX ? x - s.maxX : 0);
 
 /** A partner that stands still, follows you, or copies your input. */
 function bot(id: PlayerId, settings: DebugSettings, truth: () => World, you: InputSource): InputSource {
@@ -104,16 +123,30 @@ function bot(id: PlayerId, settings: DebugSettings, truth: () => World, you: Inp
       if (settings.bot === "idle") return { moveX: 0, moveY: 0, buttons: 0 };
       if (settings.bot === "mirror") return you.sample();
 
-      const players = truth().state.players;
-      const me = players[id];
-      const target = players[id === 0 ? 1 : 0];
-      const dx = target.x - me.x;
-      const moveX = Math.abs(dx) > 1.5 ? Math.sign(dx) : 0;
+      const world = truth();
+      const me = world.state.players[id];
+      const target = world.state.players[id === 0 ? 1 : 0];
+      let goalX = target.x;
+      let slack = 1.5;
+      let climb = false;
+      // You are higher: head for the nearest step it can jump onto, and jump at its edge.
+      if (target.y > me.y + 0.5) {
+        const step = world.solids
+          .filter((s) => s.maxY > me.y + 0.3 && s.maxY <= me.y + REACH)
+          .map((s) => ({ s, cost: gap(me.x, s) + gap(target.x, s) * 0.5 }))
+          .sort((a, b) => a.cost - b.cost)[0]?.s;
+        if (step) {
+          goalX = Math.min(Math.max(target.x, step.minX + 0.5), step.maxX - 0.5);
+          slack = 0.2;
+          const edge = gap(me.x, step);
+          climb = edge > 0 && edge < 1.4;
+        }
+      }
+      const moveX = Math.abs(goalX - me.x) > slack ? Math.sign(goalX - me.x) : 0;
       stuck = moveX !== 0 && me.grounded && Math.abs(me.vx) < 0.5 ? stuck + 1 : 0;
-      const below = target.y > me.y + 0.8 && Math.abs(dx) < 4;
       if (jumpHold > 0) jumpHold--;
       // Hold jump for a while for full height, then let go so the next press counts.
-      else if (me.grounded && (stuck > 2 || below)) jumpHold = 10;
+      else if (me.grounded && (stuck > 2 || climb)) jumpHold = 10;
       return { moveX, moveY: 0, buttons: jumpHold > 1 ? Button.Jump : 0 };
     },
   };

@@ -275,7 +275,7 @@ Object.defineProperty(window, "__lifeline", {
       return session?.view(performance.now());
     },
     get authority() {
-      return session?.world.state.players.map((p) => ({ id: p.id, x: p.x, y: p.y }));
+      return session?.world.state.players.map(({ id, x, y, vx, vy, grounded }) => ({ id, x, y, vx, vy, grounded }));
     },
     get tick() {
       return session?.world.state.tick;

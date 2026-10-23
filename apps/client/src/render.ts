@@ -91,7 +91,8 @@ export class Renderer {
     let i = 0;
     while (x < w + 20) {
       const bw = 3 + ((i * 7) % 5);
-      const bh = 6 + ((i * 13) % 9);
+      // Low enough that the skyline shows under the sky.
+      const bh = 3.5 + ((i * 13) % 9) / 2;
       const shape = new THREE.Shape();
       const lean = ((i % 3) - 1) * 0.4;
       shape.moveTo(0, 0);
@@ -102,7 +103,7 @@ export class Renderer {
       const mesh = new THREE.Mesh(new THREE.ShapeGeometry(shape), basic(i % 2 ? 0xb5a682 : 0xa8997a));
       mesh.position.set(x, 0, -20);
       this.backdrop.add(mesh);
-      x += bw + 0.5;
+      x += bw + 0.2 + ((i * 5) % 3) * 0.6;
       i++;
     }
     this.scene.add(this.backdrop);
@@ -200,13 +201,6 @@ export class Renderer {
       const needH = Math.abs(other.y - me.y) + 5;
       th = Math.max(viewHeight, needH, needW / aspect);
     }
-    // Keep the view inside the level.
-    const [lw, lh] = this.level.size;
-    const halfW = (th * aspect) / 2;
-    tx = halfW * 2 >= lw ? lw / 2 : Math.min(Math.max(tx, halfW), lw - halfW);
-    ty = Math.max(ty, th / 2 - 0.5);
-    ty = Math.min(ty, Math.max(th / 2, lh - th / 2));
-
     if (!this.hasCam) {
       this.cam = { x: tx, y: ty, h: th };
       this.hasCam = true;
@@ -215,6 +209,12 @@ export class Renderer {
       this.cam.y += (ty - this.cam.y) * 0.08;
       this.cam.h += (th - this.cam.h) * 0.05;
     }
+    // Keep the view inside the level. Clamp after smoothing, so a zoom change cannot show
+    // what is below the floor.
+    const [lw, lh] = this.level.size;
+    const halfW = (this.cam.h * aspect) / 2;
+    this.cam.x = halfW * 2 >= lw ? lw / 2 : Math.min(Math.max(this.cam.x, halfW), lw - halfW);
+    this.cam.y = Math.min(Math.max(this.cam.y, this.cam.h / 2), Math.max(this.cam.h / 2, lh - this.cam.h / 2));
     const hw = (this.cam.h * aspect) / 2;
     const hh = this.cam.h / 2;
     this.camera.left = -hw;

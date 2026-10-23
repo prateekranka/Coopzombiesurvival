@@ -64,12 +64,51 @@ export interface Session {
  * Shared by every ticker on the page, so debug mode can slow, pause and step the host and the
  * guest together. Normal play never changes it.
  */
-export const simClock = {
-  scale: 1,
-  paused: false,
+class SimClock {
+  private _scale = 1;
+  private _paused = false;
   /** Each ticker runs one tick when this goes up while paused. */
-  stepToken: 0,
-};
+  stepToken = 0;
+  // Game time is real time scaled, frozen while paused, plus one tick per step.
+  private base = 0;
+  private realAt = performance.now();
+
+  get scale() {
+    return this._scale;
+  }
+
+  get paused() {
+    return this._paused;
+  }
+
+  /** Game time in ms. Debug mode's fake link uses it, so latency follows slow motion and steps. */
+  now(): number {
+    return this._paused ? this.base : this.base + (performance.now() - this.realAt) * this._scale;
+  }
+
+  setScale(scale: number) {
+    this.rebase();
+    this._scale = scale;
+  }
+
+  setPaused(paused: boolean) {
+    this.rebase();
+    this._paused = paused;
+  }
+
+  step() {
+    this.setPaused(true);
+    this.base += TICK_MS;
+    this.stepToken++;
+  }
+
+  private rebase() {
+    this.base = this.now();
+    this.realAt = performance.now();
+  }
+}
+
+export const simClock = new SimClock();
 
 export class FixedTicker {
   private acc = 0;
@@ -300,7 +339,7 @@ export class GuestSession implements Session {
     }
     this.snapshots.push(s);
     if (this.snapshots.length > SNAPSHOT_BUFFER) this.snapshots.shift();
-    this.latestAt = performance.now();
+    this.latestAt = simClock.now();
     this.world.state.tick = s.tick;
 
     const auth = s.players.find((p) => p.id === this.localId);
@@ -336,7 +375,8 @@ export class GuestSession implements Session {
 
     const latest = this.snapshots.at(-1);
     if (!latest) return [ownView];
-    const renderTick = latest.tick + (now - this.latestAt) / 1000 / DT - INTERP_DELAY_TICKS;
+    // Game time, not frame time, so slow motion and stepping stay right in debug mode.
+    const renderTick = latest.tick + (simClock.now() - this.latestAt) / 1000 / DT - INTERP_DELAY_TICKS;
     const others: ViewPlayer[] = [];
     for (const p of latest.players) {
       if (p.id === this.localId) continue;

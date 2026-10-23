@@ -81,3 +81,34 @@ describe("player movement", () => {
     expect(DT).toBeCloseTo(1 / 30);
   });
 });
+
+describe("test room", () => {
+  it("can be climbed to the top platform with the default jump", () => {
+    resetTuning();
+    const world = settled();
+    const p = world.state.players[0];
+    // Run right and jump at each step up, like a player would.
+    const jumpAt = [6.8, 10.6, 16.6];
+    let hold = 0;
+    let next = 0;
+    for (let i = 0; i < 300 && p.x < 22; i++) {
+      if (hold > 0) hold--;
+      else if (next < jumpAt.length && p.x >= jumpAt[next]! && p.grounded) {
+        hold = 10;
+        next++;
+      }
+      stepWorld(world, [input(1, hold > 0 ? Button.Jump : 0)]);
+    }
+    for (let i = 0; i < 30; i++) stepWorld(world, []);
+    expect(p.y).toBe(5);
+  });
+
+  it("leaves head room to walk under the platforms", () => {
+    const world = settled();
+    const p = world.state.players[1];
+    p.x = 11.5; // past the first box
+    for (let i = 0; i < 400; i++) stepPlayer(p, input(1), world.solids);
+    // Stopped only by the metal crate at x = 28, not by a low platform.
+    expect(p.x).toBeCloseTo(27.7);
+  });
+});

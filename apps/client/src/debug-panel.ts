@@ -209,11 +209,8 @@ export function createDebugPanel(root: HTMLElement, session: DebugSession, rende
   const actions: Record<string, () => void> = {
     swap: () => session.swap(),
     reset: () => session.rebuild(),
-    pause: () => (simClock.paused = !simClock.paused),
-    step: () => {
-      simClock.paused = true;
-      simClock.stepToken++;
-    },
+    pause: () => simClock.setPaused(!simClock.paused),
+    step: () => simClock.step(),
     defaults: () => {
       resetTuning();
       syncSliders();
@@ -237,7 +234,7 @@ export function createDebugPanel(root: HTMLElement, session: DebugSession, rende
   wrap.addEventListener("click", (e) => {
     const el = (e.target as HTMLElement).closest<HTMLElement>("[data-act], [data-speed]");
     if (!el) return;
-    if (el.dataset.speed) simClock.scale = Number(el.dataset.speed);
+    if (el.dataset.speed) simClock.setScale(Number(el.dataset.speed));
     else actions[el.dataset.act!]?.();
     sync();
     persist();
