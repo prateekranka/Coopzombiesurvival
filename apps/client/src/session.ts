@@ -22,10 +22,11 @@ import {
   type World,
 } from "@lifeline/sim";
 import type { InputSource } from "./input";
-import { NetClient, type NetStatus } from "./net";
+import { NetClient, type NetEvents, type NetStatus, type Transport } from "./net";
 
 // The three ways to play: host (runs the sim), guest (predicts itself, interpolates the rest)
 // and local (both players in one browser, no server). GAME.md section 10.
+// Debug mode (debug.ts) builds on these with a bot partner and a simulated network.
 
 export const LEVEL_ID = "m0-test-room";
 const TICK_MS = 1000 / TICK_RATE;
@@ -44,7 +45,7 @@ export interface ViewPlayer {
 }
 
 export interface SessionStatus {
-  mode: "local" | "host" | "guest";
+  mode: "local" | "host" | "guest" | "debug";
   net: NetStatus | "local";
   peer: boolean;
   code?: string;
@@ -59,17 +60,40 @@ export interface Session {
   dispose(): void;
 }
 
-class FixedTicker {
+/**
+ * Shared by every ticker on the page, so debug mode can slow, pause and step the host and the
+ * guest together. Normal play never changes it.
+ */
+export const simClock = {
+  scale: 1,
+  paused: false,
+  /** Each ticker runs one tick when this goes up while paused. */
+  stepToken: 0,
+};
+
+export class FixedTicker {
   private acc = 0;
   private last = performance.now();
   private lastTickAt = this.last;
+  private stepToken = simClock.stepToken;
   private readonly timer: ReturnType<typeof setInterval>;
 
   constructor(step: () => void) {
     this.timer = setInterval(() => {
       const now = performance.now();
-      this.acc += now - this.last;
+      const elapsed = now - this.last;
       this.last = now;
+      if (simClock.paused) {
+        this.acc = 0;
+        if (this.stepToken !== simClock.stepToken) {
+          this.stepToken = simClock.stepToken;
+          step();
+          this.lastTickAt = now - TICK_MS;
+        }
+        return;
+      }
+      this.stepToken = simClock.stepToken;
+      this.acc += elapsed * simClock.scale;
       let steps = 0;
       while (this.acc >= TICK_MS && steps < MAX_CATCH_UP) {
         step();
@@ -78,13 +102,14 @@ class FixedTicker {
       }
       // After a long stall (a background tab), skip ahead instead of fast-forwarding.
       if (steps === MAX_CATCH_UP) this.acc = 0;
-      if (steps > 0) this.lastTickAt = now - this.acc;
+      if (steps > 0) this.lastTickAt = now - this.acc / simClock.scale;
     }, 4);
   }
 
   /** How far the render time is between the last two ticks, 0 to 1. */
   alpha(now: number): number {
-    return Math.min(1, Math.max(0, (now - this.lastTickAt) / TICK_MS));
+    if (simClock.paused) return 1;
+    return Math.min(1, Math.max(0, ((now - this.lastTickAt) * simClock.scale) / TICK_MS));
   }
 
   stop() {
@@ -94,14 +119,14 @@ class FixedTicker {
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
-function lerpPlayer(a: PlayerState | ViewPlayer, b: PlayerState | ViewPlayer, t: number): ViewPlayer {
+export function lerpPlayer(a: PlayerState | ViewPlayer, b: PlayerState | ViewPlayer, t: number): ViewPlayer {
   return { id: b.id, x: lerp(a.x, b.x, t), y: lerp(a.y, b.y, t), facing: b.facing };
 }
 
-const snapshotOf = (players: readonly PlayerState[]): ViewPlayer[] =>
+export const snapshotOf = (players: readonly PlayerState[]): ViewPlayer[] =>
   players.map((p) => ({ id: p.id, x: p.x, y: p.y, facing: p.facing }));
 
-function frameFrom(source: InputSource, seq: number): InputFrame {
+export function frameFrom(source: InputSource, seq: number): InputFrame {
   const s = source.sample();
   return { seq, moveX: s.moveX, moveY: s.moveY, buttons: s.buttons };
 }
@@ -138,7 +163,7 @@ export class HostSession implements Session {
   readonly localId: PlayerId = 0;
   private prev = snapshotOf(this.world.state.players);
   private readonly ticker: FixedTicker;
-  private readonly net: NetClient;
+  private readonly net: Transport;
   private guestInputs: InputFrame[] = [];
   private lastGuestInput: InputFrame = NO_INPUT;
   private ack = 0;
@@ -149,8 +174,9 @@ export class HostSession implements Session {
     readonly code: string,
     source: InputSource,
     name: string,
+    connect: Connect = (events) => new NetClient(code, "host", events),
   ) {
-    this.net = new NetClient(code, "host", {
+    this.net = connect({
       onWelcome: (msg) => {
         this.peer = msg.peerPresent;
         this.net.send({ t: "hello", name });
@@ -218,14 +244,15 @@ export class GuestSession implements Session {
   private peer = false;
   private netStatus: NetStatus = "connecting";
   private readonly ticker: FixedTicker;
-  private readonly net: NetClient;
+  private readonly net: Transport;
 
   constructor(
     readonly code: string,
     source: InputSource,
     name: string,
+    connect: Connect = (events) => new NetClient(code, "guest", events),
   ) {
-    this.net = new NetClient(code, "guest", {
+    this.net = connect({
       onWelcome: (msg) => {
         this.peer = msg.peerPresent;
         this.net.send({ t: "hello", name });
@@ -252,6 +279,15 @@ export class GuestSession implements Session {
       stepPlayer(this.own, frame, this.world.solids);
       this.net.send(encodeInput(frame));
     });
+  }
+
+  /** For the debug overlay. */
+  get stats() {
+    return {
+      unacked: this.history.length,
+      correction: Math.hypot(this.correction.x, this.correction.y),
+      own: this.own,
+    };
   }
 
   private onSnapshot(s: Snapshot) {
@@ -333,6 +369,9 @@ export class GuestSession implements Session {
     this.net.close();
   }
 }
+
+/** Opens the link to the room. Tests and debug mode swap in a fake one. */
+export type Connect = (events: NetEvents) => Transport;
 
 /** The Duck save, first pass. GAME.md section 9. Game data only, never physics state. */
 function newSave() {

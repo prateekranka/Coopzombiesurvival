@@ -14,8 +14,10 @@ export interface InputSource {
 }
 
 const held = new Set<string>();
+const isTextField = (t: EventTarget | null) =>
+  t instanceof HTMLTextAreaElement || (t instanceof HTMLInputElement && (t.type === "text" || t.type === "search"));
 window.addEventListener("keydown", (e) => {
-  if (e.target instanceof HTMLInputElement) return;
+  if (isTextField(e.target)) return;
   held.add(e.code);
 });
 window.addEventListener("keyup", (e) => held.delete(e.code));

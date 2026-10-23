@@ -2,7 +2,9 @@ import "./style.css";
 import { getLevel } from "@lifeline/content";
 import type { Role } from "@lifeline/protocol";
 import { isRoomCode } from "@lifeline/protocol";
-import type { PlayerId } from "@lifeline/sim";
+import { resetTuning, type PlayerId } from "@lifeline/sim";
+import { DebugSession } from "./debug";
+import { createDebugPanel, loadDebugSettings } from "./debug-panel";
 import {
   KEYS_ALL,
   KEYS_ARROWS,
@@ -29,6 +31,7 @@ const ui = document.querySelector<HTMLElement>("#ui")!;
 const params = new URLSearchParams(location.search);
 
 let session: Session | undefined;
+let debugPanel: ReturnType<typeof createDebugPanel> | undefined;
 let renderer: Renderer | undefined;
 const touch = touchControls(ui);
 const pad = (): InputSource => ({ sample: () => gamepad(firstGamepadIndex() ?? 0).sample() });
@@ -138,6 +141,13 @@ function showLobby(error?: string) {
     card.append(rejoin);
   }
 
+  const solo = el("button", "small", "Play alone (debug)");
+  solo.addEventListener("click", () => {
+    screen.remove();
+    start("debug");
+  });
+  card.append(solo);
+
   const local = el("button", "small", "Both players on this device");
   local.addEventListener("click", () => {
     screen.remove();
@@ -151,13 +161,20 @@ function showLobby(error?: string) {
   ui.append(screen);
 }
 
-async function start(mode: Role | "local", code?: string) {
+async function start(mode: Role | "local" | "debug", code?: string) {
   renderer ??= await Renderer.create(canvas, getLevel(LEVEL_ID));
 
   const touchOn = isTouchDevice();
   if (touchOn) touch.show();
 
-  if (mode === "local") {
+  // Only debug mode changes the feel values. Real games use the defaults on both iPads.
+  if (mode !== "debug") resetTuning();
+
+  if (mode === "debug") {
+    const debug = new DebugSession(loadDebugSettings(), combine(keyboard(KEYS_ALL), pad(), touch));
+    session = debug;
+    debugPanel = createDebugPanel(ui, debug, renderer);
+  } else if (mode === "local") {
     // Player 1 uses WASD, player 2 uses a gamepad or the arrow keys. GAME.md section 10.
     session = new LocalSession([combine(keyboard(KEYS_WASD), touch), combine(pad(), keyboard(KEYS_ARROWS))]);
   } else {
@@ -190,7 +207,8 @@ function updateHud() {
   if (s.code) hud.room.textContent = `Room ${s.code}`;
 
   let state: string;
-  if (s.net === "local") state = "on this device";
+  if (s.mode === "debug") state = "bot";
+  else if (s.net === "local") state = "on this device";
   else if (s.net === "reconnecting" || s.net === "connecting") state = "connecting…";
   else if (s.net === "closed") state = "disconnected";
   else state = s.peer ? "linked" : s.mode === "host" ? "waiting to join" : "waiting for host";
@@ -226,7 +244,8 @@ function updatePartnerArrow(view: ReturnType<Session["view"]>) {
 function frame(now: number) {
   if (session && renderer) {
     const view = session.view(now);
-    renderer.render(view, session.localId);
+    renderer.render(view, session.localId, session instanceof DebugSession ? session.ghosts() : []);
+    debugPanel?.update(now);
     updateHud();
     updatePartnerArrow(view);
   }
@@ -235,7 +254,14 @@ function frame(now: number) {
 requestAnimationFrame(frame);
 
 // Stop iOS from scrolling, zooming or selecting while you play.
-document.addEventListener("touchmove", (e) => e.preventDefault(), { passive: false });
+// The debug panel still scrolls.
+document.addEventListener(
+  "touchmove",
+  (e) => {
+    if (!(e.target as Element).closest?.(".debug-panel")) e.preventDefault();
+  },
+  { passive: false },
+);
 document.addEventListener("gesturestart", (e) => e.preventDefault());
 document.addEventListener("dblclick", (e) => e.preventDefault());
 
@@ -251,6 +277,9 @@ Object.defineProperty(window, "__lifeline", {
     get authority() {
       return session?.world.state.players.map((p) => ({ id: p.id, x: p.x, y: p.y }));
     },
+    get tick() {
+      return session?.world.state.tick;
+    },
     get backend() {
       return renderer?.backend;
     },
@@ -259,7 +288,8 @@ Object.defineProperty(window, "__lifeline", {
 
 const auto = params.get("auto");
 const room = params.get("room")?.toUpperCase();
-if (params.has("local")) start("local");
+if (params.has("debug")) start("debug");
+else if (params.has("local")) start("local");
 else if (auto === "host") createRoom().then((code) => start("host", code), () => showLobby("Could not reach the server."));
 else if (auto === "join" && room && isRoomCode(room)) start("guest", room);
 else showTitle();

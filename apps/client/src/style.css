@@ -371,3 +371,133 @@ button {
     z-index: 10;
   }
 }
+
+/* Debug mode. */
+.debug {
+  position: absolute;
+  top: max(12px, env(safe-area-inset-top));
+  left: max(16px, env(safe-area-inset-left));
+  bottom: max(12px, env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 16px;
+  pointer-events: none !important;
+}
+
+.debug > * {
+  pointer-events: auto;
+}
+
+.debug-toggle {
+  min-height: 44px;
+  padding: 0 16px;
+  font-weight: 700;
+  border: 3px solid var(--ink);
+  border-radius: 999px;
+  background: #ff2bd6;
+  color: #fff;
+}
+
+.debug-overlay {
+  margin: 0;
+  padding: 6px 10px;
+  font: 13px/1.35 ui-monospace, "SF Mono", Menlo, monospace;
+  color: #fff;
+  background: rgb(29 23 18 / 0.75);
+  border-radius: 8px;
+  pointer-events: none;
+}
+
+.debug-panel {
+  /* Shrinks to the space left and scrolls inside it. */
+  min-height: 0;
+  flex: 0 1 auto;
+  width: min(320px, calc(100vw - 32px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  padding: 12px 14px;
+  border: 3px solid var(--ink);
+  border-radius: 14px;
+  background: rgb(239 230 207 / 0.96);
+}
+
+.debug-panel section + section {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 2px dashed rgb(29 23 18 / 0.3);
+}
+
+.debug-panel h3 {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+
+.debug-panel label {
+  display: grid;
+  gap: 2px;
+  margin: 6px 0;
+}
+
+.debug-panel label.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.debug-panel label.changed > span {
+  color: #b0127f;
+  font-weight: 700;
+}
+
+.debug-panel output {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+}
+
+.debug-panel input[type="range"] {
+  width: 100%;
+  min-height: 32px;
+}
+
+.debug-panel input[type="checkbox"] {
+  width: 22px;
+  height: 22px;
+}
+
+.debug-panel select,
+.debug-panel button {
+  min-height: 40px;
+  padding: 0 10px;
+  font: inherit;
+  border: 2px solid var(--ink);
+  border-radius: 10px;
+  background: #fff;
+}
+
+.debug-panel .row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0;
+}
+
+.debug-panel button.on {
+  background: var(--brass);
+  font-weight: 700;
+}
+
+.debug-panel .copy-out {
+  width: 100%;
+  font: 13px ui-monospace, Menlo, monospace;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.debug-panel .keys {
+  margin: 10px 0 0;
+  font-size: 13px;
+  opacity: 0.75;
+}

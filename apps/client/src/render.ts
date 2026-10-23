@@ -48,6 +48,9 @@ export class Renderer {
   private readonly scene = new THREE.Scene();
   private readonly camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
   private readonly players = new Map<PlayerId, THREE.Group>();
+  private readonly ghosts = new Map<PlayerId, THREE.Group>();
+  /** Debug mode switches. */
+  readonly debug = { hitboxes: false, zoom: 1 };
   private readonly backdrop = new THREE.Group();
   private cam = { x: 0, y: 0, h: VIEW_HEIGHT };
   private hasCam = false;
@@ -62,7 +65,10 @@ export class Renderer {
     this.camera.position.z = 50;
     this.buildBackdrop();
     this.buildLevel();
-    for (const id of [0, 1] as const) this.players.set(id, this.buildPlayer(id));
+    for (const id of [0, 1] as const) {
+      this.players.set(id, this.buildPlayer(id));
+      this.ghosts.set(id, this.buildGhost(id));
+    }
     this.resize();
     window.addEventListener("resize", () => this.resize());
   }
@@ -136,10 +142,40 @@ export class Renderer {
     const pupil = new THREE.Mesh(new THREE.CircleGeometry(0.045, 10), basic(PALETTE.ink));
     pupil.position.set(0.03, 0, 0.01);
     eye.add(pupil);
-    group.add(outline, body, eye);
+    group.add(outline, body, eye, this.hitbox(0xff2bd6));
     group.position.z = 1 + id * 0.1;
     this.scene.add(group);
     return group;
+  }
+
+  /** Where the host has this player, drawn as an outline. Debug mode only. */
+  private buildGhost(id: PlayerId): THREE.Group {
+    const group = new THREE.Group();
+    const pts = capsuleShape(PLAYER_WIDTH, PLAYER_HEIGHT)
+      .getPoints(12)
+      .map((p) => new THREE.Vector3(p.x, p.y, 0));
+    pts.push(pts[0]!.clone());
+    group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicNodeMaterial({ color: PLAYER_COLORS[id] })));
+    group.position.z = 2;
+    group.visible = false;
+    this.scene.add(group);
+    return group;
+  }
+
+  /** The collision box the sim uses, in the player's own space. */
+  private hitbox(color: number): THREE.Line {
+    const h = PLAYER_WIDTH / 2;
+    const pts = [
+      [-h, 0],
+      [h, 0],
+      [h, PLAYER_HEIGHT],
+      [-h, PLAYER_HEIGHT],
+      [-h, 0],
+    ].map(([x, y]) => new THREE.Vector3(x, y, 0.05));
+    const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicNodeMaterial({ color }));
+    line.name = "hitbox";
+    line.visible = false;
+    return line;
   }
 
   private resize() {
@@ -155,13 +191,14 @@ export class Renderer {
     const aspect = this.canvas.clientWidth / Math.max(1, this.canvas.clientHeight);
     let tx = me.x + me.facing * LOOK_AHEAD;
     let ty = me.y + PLAYER_HEIGHT;
-    let th = VIEW_HEIGHT;
+    const viewHeight = VIEW_HEIGHT * this.debug.zoom;
+    let th = viewHeight;
     if (other && Math.hypot(other.x - me.x, other.y - me.y) < FRAME_BOTH_DISTANCE) {
       tx = (me.x + other.x) / 2;
       ty = (me.y + other.y) / 2 + PLAYER_HEIGHT;
       const needW = Math.abs(other.x - me.x) + 6;
       const needH = Math.abs(other.y - me.y) + 5;
-      th = Math.max(VIEW_HEIGHT, needH, needW / aspect);
+      th = Math.max(viewHeight, needH, needW / aspect);
     }
     // Keep the view inside the level.
     const [lw, lh] = this.level.size;
@@ -197,7 +234,7 @@ export class Renderer {
     return { x: ((v.x + 1) / 2) * this.canvas.clientWidth, y: ((1 - v.y) / 2) * this.canvas.clientHeight };
   }
 
-  render(view: ViewPlayer[], followId: PlayerId) {
+  render(view: ViewPlayer[], followId: PlayerId, ghosts: ViewPlayer[] = []) {
     for (const [id, group] of this.players) {
       const p = view.find((v) => v.id === id);
       group.visible = !!p;
@@ -205,6 +242,12 @@ export class Renderer {
       group.position.x = p.x;
       group.position.y = p.y;
       group.scale.x = p.facing;
+      group.getObjectByName("hitbox")!.visible = this.debug.hitboxes;
+    }
+    for (const [id, group] of this.ghosts) {
+      const g = ghosts.find((v) => v.id === id);
+      group.visible = !!g;
+      if (g) group.position.set(g.x, g.y, 2);
     }
     this.updateCamera(view, followId);
     this.renderer.render(this.scene, this.camera);

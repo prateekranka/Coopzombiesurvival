@@ -11,6 +11,13 @@ export interface NetEvents {
   onStatus(status: NetStatus): void;
 }
 
+/** What a session needs from its link: the real WebSocket, or debug mode's loopback. */
+export interface Transport {
+  readonly isOpen: boolean;
+  send(data: ArrayBuffer | PeerMessage): void;
+  close(): void;
+}
+
 export type NetStatus = "connecting" | "open" | "reconnecting" | "closed";
 
 const REJOIN_WINDOW_MS = 60_000;
@@ -22,7 +29,7 @@ export async function createRoom(): Promise<string> {
   return body.code;
 }
 
-export class NetClient {
+export class NetClient implements Transport {
   private ws: WebSocket | undefined;
   private closedAt = 0;
   private stopped = false;

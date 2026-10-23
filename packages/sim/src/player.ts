@@ -1,18 +1,6 @@
 import { overlaps, type Box } from "./collision";
 import { Button, type InputFrame } from "./input";
-import {
-  AIR_ACCEL,
-  COYOTE_TICKS,
-  DT,
-  GRAVITY,
-  GROUND_ACCEL,
-  JUMP_BUFFER_TICKS,
-  JUMP_SPEED,
-  MAX_FALL_SPEED,
-  PLAYER_HEIGHT,
-  PLAYER_WIDTH,
-  WALK_SPEED,
-} from "./tuning";
+import { DT, PLAYER_HEIGHT, PLAYER_WIDTH, jumpSpeed, tuning } from "./tuning";
 
 export type PlayerId = 0 | 1;
 
@@ -52,28 +40,28 @@ function approach(value: number, target: number, step: number): number {
  */
 export function stepPlayer(p: PlayerState, input: InputFrame, solids: readonly Box[]): void {
   const moveX = Math.max(-1, Math.min(1, input.moveX));
-  const accel = p.grounded ? GROUND_ACCEL : AIR_ACCEL;
-  p.vx = approach(p.vx, moveX * WALK_SPEED, accel * DT);
+  const accel = p.grounded ? tuning.groundAccel : tuning.airAccel;
+  p.vx = approach(p.vx, moveX * tuning.walkSpeed, accel * DT);
   if (moveX > 0.1) p.facing = 1;
   else if (moveX < -0.1) p.facing = -1;
 
   const jumpDown = (input.buttons & Button.Jump) !== 0;
-  if (jumpDown && !p.jumpHeld) p.jumpBuffer = JUMP_BUFFER_TICKS;
+  if (jumpDown && !p.jumpHeld) p.jumpBuffer = tuning.jumpBufferTicks;
   else if (p.jumpBuffer > 0) p.jumpBuffer--;
   p.jumpHeld = jumpDown;
 
-  if (p.grounded) p.coyote = COYOTE_TICKS;
+  if (p.grounded) p.coyote = tuning.coyoteTicks;
   else if (p.coyote > 0) p.coyote--;
 
   if (p.jumpBuffer > 0 && p.coyote > 0) {
-    p.vy = JUMP_SPEED;
+    p.vy = jumpSpeed();
     p.jumpBuffer = 0;
     p.coyote = 0;
   }
   // Release early for a short hop.
-  if (!jumpDown && p.vy > 0) p.vy *= 0.6;
+  if (!jumpDown && p.vy > 0) p.vy *= tuning.jumpCut;
 
-  p.vy = Math.max(p.vy - GRAVITY * DT, -MAX_FALL_SPEED);
+  p.vy = Math.max(p.vy - tuning.gravity * DT, -tuning.maxFallSpeed);
 
   // Move one axis at a time and push out of solids.
   const dirX = Math.sign(p.vx);

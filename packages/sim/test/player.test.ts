@@ -1,6 +1,6 @@
 import { getLevel } from "@lifeline/content";
 import { describe, expect, it } from "vitest";
-import { Button, DT, JUMP_HEIGHT, WALK_SPEED, createWorld, stepPlayer, stepWorld, type InputFrame } from "../src";
+import { Button, DEFAULT_TUNING, DT, createWorld, resetTuning, setTuning, tuning, stepPlayer, stepWorld, type InputFrame } from "../src";
 
 const level = getLevel("m0-test-room");
 const input = (moveX = 0, buttons = 0, seq = 0): InputFrame => ({ seq, moveX, moveY: 0, buttons });
@@ -23,7 +23,7 @@ describe("player movement", () => {
   it("walks at walk speed", () => {
     const world = settled();
     for (let i = 0; i < 15; i++) stepWorld(world, [input(1)]);
-    expect(world.state.players[0].vx).toBeCloseTo(WALK_SPEED);
+    expect(world.state.players[0].vx).toBeCloseTo(DEFAULT_TUNING.walkSpeed);
   });
 
   it("jumps about the jump height", () => {
@@ -35,8 +35,8 @@ describe("player movement", () => {
       stepWorld(world, [input(0, Button.Jump)]);
       maxY = Math.max(maxY, p.y);
     }
-    expect(maxY - 2).toBeGreaterThan(JUMP_HEIGHT - 0.15);
-    expect(maxY - 2).toBeLessThan(JUMP_HEIGHT + 0.15);
+    expect(maxY - 2).toBeGreaterThan(DEFAULT_TUNING.jumpHeight - 0.15);
+    expect(maxY - 2).toBeLessThan(DEFAULT_TUNING.jumpHeight + 0.15);
     expect(p.grounded).toBe(true);
   });
 
@@ -64,6 +64,17 @@ describe("player movement", () => {
       return p;
     };
     expect(run()).toEqual(run());
+  });
+
+  it("reads live tuning values", () => {
+    setTuning({ walkSpeed: 8, gravity: Number.NaN });
+    expect(tuning.gravity).toBe(DEFAULT_TUNING.gravity);
+    const world = settled();
+    // Few enough ticks to reach full speed before the first box.
+    for (let i = 0; i < 8; i++) stepWorld(world, [input(1)]);
+    expect(world.state.players[0].vx).toBeCloseTo(8);
+    resetTuning();
+    expect(tuning).toEqual(DEFAULT_TUNING);
   });
 
   it("uses a fixed 30 Hz step", () => {
