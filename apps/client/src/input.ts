@@ -113,6 +113,10 @@ export function firstGamepadIndex(): number | undefined {
   return pads.find((p) => p?.connected)?.index;
 }
 
+export function isTouchDevice(): boolean {
+  return typeof window !== "undefined" && ("ontouchstart" in window || (navigator.maxTouchPoints ?? 0) > 0);
+}
+
 /** Combines sources: the strongest stick wins and buttons are merged. */
 export function combine(...sources: InputSource[]): InputSource {
   return {
@@ -143,7 +147,8 @@ export function touchControls(root: HTMLElement): InputSource & { show(): void }
     <div class="stick-zone"><div class="stick-base"><div class="stick-knob"></div></div></div>
     <div class="buttons">
       <button class="btn btn-signal" data-btn="${Button.Signal}" aria-label="Signal">Signal</button>
-      <button class="btn btn-use" data-btn="${Button.Use}" aria-label="Use">Use</button>
+      <button class="btn btn-interact" data-btn="${Button.Interact}" aria-label="Winch">Winch</button>
+      <button class="btn btn-use" data-btn="${Button.Use}" aria-label="Pump/Use">Pump</button>
       <button class="btn btn-attack" data-btn="${Button.Attack}" aria-label="Attack">Hit</button>
       <button class="btn btn-jump" data-btn="${Button.Jump}" aria-label="Jump">Jump</button>
     </div>`;
@@ -179,44 +184,39 @@ export function touchControls(root: HTMLElement): InputSource & { show(): void }
     }
     knob.style.transform = `translate(${dx}px, ${dy}px)`;
     moveX = dx / STICK_RADIUS;
-    moveY = -dy / STICK_RADIUS;
+    moveY = -(dy / STICK_RADIUS);
   });
-  const release = (e: PointerEvent) => {
+  const releaseStick = (e: PointerEvent) => {
     if (e.pointerId !== stickId) return;
     stickId = undefined;
-    moveX = moveY = 0;
     base.classList.remove("active");
+    moveX = 0;
+    moveY = 0;
   };
-  zone.addEventListener("pointerup", release);
-  zone.addEventListener("pointercancel", release);
+  zone.addEventListener("pointerup", releaseStick);
+  zone.addEventListener("pointercancel", releaseStick);
 
   let buttons = 0;
-  for (const el of layer.querySelectorAll<HTMLButtonElement>(".btn")) {
-    const bit = Number(el.dataset.btn);
-    const down = (e: PointerEvent) => {
+  layer.querySelectorAll<HTMLElement>(".buttons .btn").forEach((btn) => {
+    const mask = Number(btn.dataset.btn);
+    const press = (e: PointerEvent) => {
       e.preventDefault();
-      el.setPointerCapture(e.pointerId);
-      buttons |= bit;
-      el.classList.add("down");
+      btn.setPointerCapture(e.pointerId);
+      buttons |= mask;
+      btn.classList.add("down");
     };
-    const up = () => {
-      buttons &= ~bit;
-      el.classList.remove("down");
+    const release = (e: PointerEvent) => {
+      e.preventDefault();
+      buttons &= ~mask;
+      btn.classList.remove("down");
     };
-    el.addEventListener("pointerdown", down);
-    el.addEventListener("pointerup", up);
-    el.addEventListener("pointercancel", up);
-    el.addEventListener("lostpointercapture", up);
-  }
+    btn.addEventListener("pointerdown", press);
+    btn.addEventListener("pointerup", release);
+    btn.addEventListener("pointercancel", release);
+  });
 
   return {
-    show() {
-      layer.hidden = false;
-    },
-    sample() {
-      return { moveX: Math.abs(moveX) > DEADZONE ? moveX : 0, moveY, buttons };
-    },
+    sample: () => ({ moveX, moveY, buttons }),
+    show: () => (layer.hidden = false),
   };
 }
-
-export const isTouchDevice = () => matchMedia("(pointer: coarse)").matches || navigator.maxTouchPoints > 0;

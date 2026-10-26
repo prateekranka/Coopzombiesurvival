@@ -1,6 +1,6 @@
 import { getLevel } from "@lifeline/content";
-import type { PeerMessage, Role } from "@lifeline/protocol";
-import { Button, createWorld, stepWorld, type Box, type PlayerId, type PlayerState, type World } from "@lifeline/sim";
+import type { PeerMessage } from "@lifeline/protocol";
+import { Button, createWorld, stepWorld, type Box, type HoseState, type PlayerId, type PlayerState, type World } from "@lifeline/sim";
 import type { InputSample, InputSource } from "./input";
 import type { NetEvents } from "./net";
 import {
@@ -59,88 +59,98 @@ function loopback(settings: DebugSettings): [Connect, Connect] {
   let users = 2;
   const pump = setInterval(() => {
     const now = simClock.now();
-    // Arrival times only grow per direction, but the two directions interleave.
-    while (true) {
-      const i = queue.findIndex((m) => m.at <= now);
-      if (i < 0) break;
-      queue.splice(i, 1)[0]!.deliver();
-    }
+    while (queue.length && queue[0]!.at <= now) queue.shift()!.deliver();
   }, 4);
 
-  const make = (me: 0 | 1, role: Role): Connect => (events) => {
-    const self = ends[me];
-    const peer = ends[me === 0 ? 1 : 0];
-    self.events = events;
-    queue.push({
-      at: simClock.now(),
-      deliver: () => {
-        self.open = true;
-        events.onStatus("open");
-        events.onWelcome({ t: "welcome", role, code: "DBUG", peerPresent: peer.open, save: {} });
-        if (peer.open) peer.events?.onPeer(true);
-      },
-    });
-    return {
-      get isOpen() {
-        return self.open;
-      },
-      send(data: ArrayBuffer | PeerMessage) {
-        if (!self.open) return;
-        if (!(data instanceof ArrayBuffer) && data.t === "save") return;
-        // Like a WebSocket, messages keep their order: never arrive before the previous one.
-        const at = Math.max(peer.lastAt, simClock.now() + settings.latency + Math.random() * settings.jitter);
-        peer.lastAt = at;
-        queue.push({
-          at,
-          deliver: () => {
-            if (!peer.open || !peer.events) return;
-            if (data instanceof ArrayBuffer) peer.events.onBinary(data);
-            else peer.events.onControl(data);
-          },
-        });
-      },
-      close() {
-        self.open = false;
-        if (--users === 0) clearInterval(pump);
-      },
-    };
+  const send = (from: 0 | 1, deliver: () => void) => {
+    const to = from === 0 ? 1 : 0;
+    if (!ends[to].open) return;
+    const now = simClock.now();
+    const delay = Math.max(0, settings.latency + (Math.random() - 0.5) * 2 * settings.jitter);
+    // Latency can fluctuate, but packets on a TCP connection never pass each other.
+    const at = Math.max(now + delay, ends[from].lastAt + 1);
+    ends[from].lastAt = at;
+    queue.push({ at, deliver });
+    queue.sort((a, b) => a.at - b.at);
   };
-  return [make(0, "host"), make(1, "guest")];
+
+  const connect =
+    (from: 0 | 1): Connect =>
+    (events: NetEvents) => {
+      ends[from].events = events;
+      ends[from].open = true;
+      ends[from].lastAt = 0;
+      setTimeout(() => {
+        events.onStatus?.("open");
+        events.onWelcome({
+          t: "welcome",
+          role: from === 0 ? "host" : "guest",
+          code: "DBUG",
+          peerPresent: ends[from === 0 ? 1 : 0].open,
+          save: null,
+        });
+        if (ends[from === 0 ? 1 : 0].open) ends[from === 0 ? 1 : 0].events?.onPeer(true);
+      }, 0);
+      return {
+        get isOpen() {
+          return ends[from].open;
+        },
+        send(data: ArrayBuffer | PeerMessage) {
+          const to = from === 0 ? 1 : 0;
+          if (data instanceof ArrayBuffer) {
+            const copy = data.slice(0);
+            send(from, () => ends[to].events?.onBinary(copy));
+          } else {
+            const copy = JSON.parse(JSON.stringify(data)) as PeerMessage;
+            send(from, () => ends[to].events?.onControl(copy));
+          }
+        },
+        close() {
+          ends[from].open = false;
+          ends[from === 0 ? 1 : 0].events?.onPeer(false);
+          users--;
+          if (users === 0) clearInterval(pump);
+        },
+      };
+    };
+
+  return [connect(0), connect(1)];
 }
 
-/** Highest step the bot tries to jump onto, in metres. The default jump is 1.3 m. */
-const REACH = 1.2;
-
-/** Horizontal distance from x to a box, 0 when x is above it. */
-const gap = (x: number, s: Box) => (x < s.minX ? s.minX - x : x > s.maxX ? x - s.maxX : 0);
-
-/** A partner that stands still, follows you, or copies your input. */
-export function bot(id: PlayerId, settings: DebugSettings, truth: () => World, you: InputSource): InputSource {
+/** Simple platformer follower bot. GAME.md section 6.7. */
+export function bot(id: PlayerId, settings: DebugSettings, getWorld: () => World, you: InputSource): InputSource {
   let jumpHold = 0;
   let stuck = 0;
   return {
     sample(): InputSample {
       if (settings.bot === "idle") return { moveX: 0, moveY: 0, buttons: 0 };
-      if (settings.bot === "mirror") return you.sample();
-
-      const world = truth();
+      if (settings.bot === "mirror") {
+        const s = you.sample();
+        return { moveX: -s.moveX, moveY: s.moveY, buttons: s.buttons };
+      }
+      const world = getWorld();
       const me = world.state.players[id];
-      const target = world.state.players[id === 0 ? 1 : 0];
-      let goalX = target.x;
-      let slack = 1.5;
+      const partner = world.state.players[id === 0 ? 1 : 0];
+      const target = partner.x;
+
+      // Follow horizontally, keeping a short gap.
+      let goalX = target;
+      let slack = 1.0;
       let climb = false;
-      // You are higher: head for the nearest step it can jump onto, and jump at its edge.
-      if (target.y > me.y + 0.5) {
-        const step = world.solids
-          .filter((s) => s.maxY > me.y + 0.3 && s.maxY <= me.y + REACH)
-          .map((s) => ({ s, cost: gap(me.x, s) + gap(target.x, s) * 0.5 }))
-          .sort((a, b) => a.cost - b.cost)[0]?.s;
+
+      // If the partner is on a higher platform, find a ledge on the way up.
+      if (partner.y > me.y + 0.8) {
+        const gap = (x: number, s: Box) => (x < s.minX ? s.minX - x : x > s.maxX ? x - s.maxX : 0);
+        // Candidate platforms you can reach from here.
+        const steps = world.solids
+          .filter((s) => s.maxY > me.y && s.maxY <= me.y + 2.2)
+          .sort((a, b) => gap(me.x, a) - gap(me.x, b));
+        const step = steps[0];
         if (step) {
-          goalX = Math.min(Math.max(target.x, step.minX + 0.5), step.maxX - 0.5);
+          goalX = Math.max(step.minX + 0.3, Math.min(step.maxX - 0.3, me.x));
           slack = 0.2;
           const edge = gap(me.x, step);
           const dir = Math.sign(goalX - me.x);
-          // Jump when close, or when the next stride would walk off what it stands on.
           const ahead = me.x + dir * 0.6;
           const supported = world.solids.some((s) => s.maxY === me.y && ahead >= s.minX && ahead <= s.maxX);
           climb = edge > 0 && (edge < 1.4 || !supported);
@@ -149,7 +159,6 @@ export function bot(id: PlayerId, settings: DebugSettings, truth: () => World, y
       const moveX = Math.abs(goalX - me.x) > slack ? Math.sign(goalX - me.x) : 0;
       stuck = moveX !== 0 && me.grounded && Math.abs(me.vx) < 0.5 ? stuck + 1 : 0;
       if (jumpHold > 0) jumpHold--;
-      // Hold jump for a while for full height, then let go so the next press counts.
       else if (me.grounded && (stuck > 2 || climb)) jumpHold = 10;
       return { moveX, moveY: 0, buttons: jumpHold > 1 ? Button.Jump : 0 };
     },
@@ -168,7 +177,6 @@ export class DebugSession implements Session {
     this.build();
   }
 
-  /** Rebuilds the game for the current settings, from the spawn points. */
   rebuild() {
     this.teardown();
     this.build();
@@ -178,12 +186,10 @@ export class DebugSession implements Session {
     return this.settings.controlled;
   }
 
-  /** The host's world: the truth. */
   get world(): World {
     return this.solo?.world ?? this.host!.world;
   }
 
-  /** Your player as this screen knows it: predicted when you play the guest. */
   get localState(): PlayerState {
     if (this.guest && this.settings.controlled === 1) return this.guest.stats.own;
     return this.world.state.players[this.settings.controlled];
@@ -205,7 +211,10 @@ export class DebugSession implements Session {
     return this.settings.controlled === 0 ? this.host!.view(now) : this.guest!.view(now);
   }
 
-  /** In net sim, where the other side has the players. */
+  hoseView(): HoseState {
+    return this.world.state.hose;
+  }
+
   ghosts(): ViewPlayer[] {
     if (this.solo || !this.settings.ghosts) return [];
     if (this.settings.controlled === 1) return snapshotOf(this.host!.world.state.players);

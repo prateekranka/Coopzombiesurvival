@@ -21,7 +21,7 @@ import { createRoom } from "./net";
 import { Renderer } from "./render";
 import { GuestSession, HostSession, LEVEL_ID, LocalSession, type Session } from "./session";
 
-// Title screen, lobby and HUD. GAME.md sections 7 and 8.
+// Title screen, lobby and HUD. GAME.md sections 6.6, 7 and 8.
 
 const NAMES: Record<PlayerId, string> = { 0: "Wren", 1: "Cass" };
 const LAST_ROOM_KEY = "lifeline.lastRoom";
@@ -30,6 +30,7 @@ const canvas = document.querySelector<HTMLCanvasElement>("#game")!;
 const ui = document.querySelector<HTMLElement>("#ui")!;
 const params = new URLSearchParams(location.search);
 
+let currentLevelId = params.get("level") === "m0-test-room" ? "m0-test-room" : LEVEL_ID;
 let session: Session | undefined;
 let debugPanel: ReturnType<typeof createDebugPanel> | undefined;
 let renderer: Renderer | undefined;
@@ -92,6 +93,17 @@ function showLobby(error?: string) {
   const screen = el("div", "screen lobby");
   const card = el("div", "card");
   card.append(el("h2", "", "Play together"));
+
+  // Level selector toggle
+  const levelRow = el("div", "level-toggle");
+  const levelLabel = el("span", "", `Level: ${currentLevelId === "m1-harbour" ? "Day 40: Harbour Reach" : "Test Room"}`);
+  const levelBtn = el("button", "small", "Switch Level");
+  levelBtn.addEventListener("click", () => {
+    currentLevelId = currentLevelId === "m1-harbour" ? "m0-test-room" : "m1-harbour";
+    levelLabel.textContent = `Level: ${currentLevelId === "m1-harbour" ? "Day 40: Harbour Reach" : "Test Room"}`;
+  });
+  levelRow.append(levelLabel, levelBtn);
+  card.append(levelRow);
 
   const host = el("button", "big primary", "Host a room");
   host.addEventListener("click", async () => {
@@ -162,12 +174,11 @@ function showLobby(error?: string) {
 }
 
 async function start(mode: Role | "local" | "debug", code?: string) {
-  renderer ??= await Renderer.create(canvas, getLevel(LEVEL_ID));
+  renderer ??= await Renderer.create(canvas, getLevel(currentLevelId));
 
   const touchOn = isTouchDevice();
   if (touchOn) touch.show();
 
-  // Only debug mode changes the feel values. Real games use the defaults on both iPads.
   if (mode !== "debug") resetTuning();
 
   if (mode === "debug") {
@@ -175,13 +186,14 @@ async function start(mode: Role | "local" | "debug", code?: string) {
     session = debug;
     debugPanel = createDebugPanel(ui, debug, renderer);
   } else if (mode === "local") {
-    // Player 1 uses WASD, player 2 uses a gamepad or the arrow keys. GAME.md section 10.
-    session = new LocalSession([combine(keyboard(KEYS_WASD), touch), combine(pad(), keyboard(KEYS_ARROWS))]);
+    session = new LocalSession([combine(keyboard(KEYS_WASD), touch), combine(pad(), keyboard(KEYS_ARROWS))], currentLevelId);
   } else {
     const source = combine(keyboard(KEYS_ALL), pad(), touch);
     writeLastRoom(code!, mode);
     session =
-      mode === "host" ? new HostSession(code!, source, NAMES[0]) : new GuestSession(code!, source, NAMES[1]);
+      mode === "host"
+        ? new HostSession(code!, source, NAMES[0], undefined, currentLevelId)
+        : new GuestSession(code!, source, NAMES[1], undefined, currentLevelId);
   }
   showHud();
 }
@@ -190,12 +202,29 @@ const hud = {
   root: el("div", "hud"),
   room: el("div", "pill room"),
   partner: el("div", "pill partner"),
-  objective: el("div", "objective", "Find each other. Jump on the boxes."),
+  objective: el("div", "objective", "Keep the lifeline intact. Pump air and manage snags."),
   arrow: el("div", "partner-arrow"),
+  // Air Pressure Gauge HUD
+  gaugePanel: el("div", "gauge-panel"),
+  gaugeLabel: el("span", "gauge-label", "AIR"),
+  gaugeBarOuter: el("div", "gauge-bar-outer"),
+  gaugeSafeBand: el("div", "gauge-safe-band"),
+  gaugeBarFill: el("div", "gauge-bar-fill"),
+  gaugePsi: el("span", "gauge-psi", "60 PSI"),
+  snagBadge: el("span", "snag-badge", "1 SNAG"),
+  signalToast: el("div", "signal-toast"),
 };
 
+let lastSignalTick = -1;
+let signalTimeout: ReturnType<typeof setTimeout> | undefined;
+
 function showHud() {
-  hud.root.append(hud.room, hud.partner, hud.objective, hud.arrow);
+  hud.gaugeBarOuter.append(hud.gaugeSafeBand, hud.gaugeBarFill);
+  hud.snagBadge.hidden = true;
+  hud.gaugePanel.append(hud.gaugeLabel, hud.gaugeBarOuter, hud.gaugePsi, hud.snagBadge);
+  hud.signalToast.hidden = true;
+
+  hud.root.append(hud.room, hud.partner, hud.gaugePanel, hud.objective, hud.signalToast, hud.arrow);
   ui.append(hud.root);
 }
 
@@ -215,6 +244,39 @@ function updateHud() {
   hud.partner.textContent = `${NAMES[partnerId]} · ${state}`;
   hud.partner.dataset.player = String(partnerId);
   hud.partner.dataset.linked = String(s.peer && (s.net === "open" || s.net === "local"));
+
+  // Update Air Hose & Gauge HUD
+  const hose = session.hoseView ? session.hoseView() : session.world.state.hose;
+  if (hose) {
+    const psi = Math.max(0, Math.min(100, hose.pressure));
+    hud.gaugePsi.textContent = `${Math.round(psi)} PSI`;
+    hud.gaugeBarFill.style.width = `${psi}%`;
+
+    hud.gaugeBarFill.classList.toggle("warning", psi < 35 || psi > 80);
+    hud.gaugeBarFill.classList.toggle("danger", psi < 15 || psi > 85);
+
+    if (hose.snags > 0) {
+      hud.snagBadge.hidden = false;
+      hud.snagBadge.textContent = `${hose.snags} SNAG${hose.snags > 1 ? "S" : ""}`;
+    } else {
+      hud.snagBadge.hidden = true;
+    }
+
+    // Line Signal popup
+    if (hose.lastReceivedSignal && hose.lastReceivedSignal.tick !== lastSignalTick) {
+      lastSignalTick = hose.lastReceivedSignal.tick;
+      const sig = hose.lastReceivedSignal;
+      const sender = NAMES[sig.recipientId === 0 ? 1 : 0];
+      hud.signalToast.textContent = `⚡ ${sender}: "${sig.text}" (${sig.pulls} pull${sig.pulls > 1 ? "s" : ""})`;
+      hud.signalToast.hidden = false;
+      hud.signalToast.classList.add("signal-pulse");
+      if (signalTimeout) clearTimeout(signalTimeout);
+      signalTimeout = setTimeout(() => {
+        hud.signalToast.hidden = true;
+        hud.signalToast.classList.remove("signal-pulse");
+      }, 3500);
+    }
+  }
 }
 
 function updatePartnerArrow(view: ReturnType<Session["view"]>) {
@@ -241,10 +303,14 @@ function updatePartnerArrow(view: ReturnType<Session["view"]>) {
   hud.arrow.innerHTML = `<span class="tip" style="transform: rotate(${angle}rad)"></span><span class="dist">${Math.round(Math.hypot(other.x - me.x, other.y - me.y))} m</span>`;
 }
 
+let lastFrameTime = performance.now();
 function frame(now: number) {
   if (session && renderer) {
+    const dt = Math.min(0.1, (now - lastFrameTime) / 1000);
+    lastFrameTime = now;
     const view = session.view(now);
-    renderer.render(view, session.localId, session instanceof DebugSession ? session.ghosts() : []);
+    const hose = session.hoseView ? session.hoseView() : session.world.state.hose;
+    renderer.render(view, session.localId, session instanceof DebugSession ? session.ghosts() : [], hose, dt);
     debugPanel?.update(now);
     updateHud();
     updatePartnerArrow(view);
@@ -276,6 +342,9 @@ Object.defineProperty(window, "__lifeline", {
     },
     get authority() {
       return session?.world.state.players.map(({ id, x, y, vx, vy, grounded }) => ({ id, x, y, vx, vy, grounded }));
+    },
+    get hose() {
+      return session?.world.state.hose;
     },
     get local() {
       if (!(session instanceof DebugSession)) return undefined;

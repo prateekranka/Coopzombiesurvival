@@ -1,0 +1,25 @@
+{
+  "id": "m1-harbour",
+  "chapter": 0,
+  "name": "Day 40: Harbour Reach",
+  "size": [64, 22],
+  "water": { "level": 9.0 },
+  "geometry": [
+    { "type": "poly", "points": [[0, 0], [12, 0], [12, 9.5], [0, 9.5]], "material": "concrete" },
+    { "type": "poly", "points": [[0, 9.5], [1, 9.5], [1, 22], [0, 22]], "material": "concrete" },
+    { "type": "poly", "points": [[12, 0], [64, 0], [64, 2], [12, 2]], "material": "concrete" },
+    { "type": "poly", "points": [[63, 2], [64, 2], [64, 22], [63, 22]], "material": "concrete" },
+    { "type": "poly", "points": [[12.5, 8.8], [20.5, 8.8], [20.5, 9.6], [12.5, 9.6]], "material": "wood" },
+    { "type": "poly", "points": [[23, 2], [25, 2], [25, 5], [23, 5]], "material": "wood" },
+    { "type": "poly", "points": [[29, 2], [34, 2], [34, 4.5], [29, 4.5]], "material": "metal" },
+    { "type": "poly", "points": [[38, 2], [42, 2], [42, 6], [38, 6]], "material": "concrete" },
+    { "type": "poly", "points": [[48, 2], [53, 2], [53, 4], [48, 4]], "material": "metal" },
+    { "type": "poly", "points": [[55, 2], [58, 2], [58, 3.2], [55, 3.2]], "material": "metal" }
+  ],
+  "spawns": { "out": [17.0, 9.8], "anchor": [14.5, 9.8] },
+  "checkpoints": [
+    { "id": "duck-deck", "pos": [14.5, 9.8], "swapBell": true },
+    { "id": "sunken-crate", "pos": [31.5, 4.5], "swapBell": false },
+    { "id": "harbour-ruins", "pos": [50.5, 4.0], "swapBell": false }
+  ]
+}

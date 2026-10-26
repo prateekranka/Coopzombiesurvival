@@ -1,8 +1,10 @@
 import { getLevel } from "@lifeline/content";
 import {
   MsgType,
+  decodeHose,
   decodeInput,
   decodeSnapshot,
+  encodeHose,
   encodeInput,
   encodeSnapshot,
   messageType,
@@ -16,6 +18,7 @@ import {
   createWorld,
   stepPlayer,
   stepWorld,
+  type HoseState,
   type InputFrame,
   type PlayerId,
   type PlayerState,
@@ -28,7 +31,9 @@ import { NetClient, type NetEvents, type NetStatus, type Transport } from "./net
 // and local (both players in one browser, no server). GAME.md section 10.
 // Debug mode (debug.ts) builds on these with a bot partner and a simulated network.
 
-export const LEVEL_ID = "m0-test-room";
+const queryParam = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("level") : null;
+export const LEVEL_ID = queryParam === "m1-harbour" || queryParam === "harbour" ? "m1-harbour" : "m0-test-room";
+
 const TICK_MS = 1000 / TICK_RATE;
 /** The guest shows the host's world this far in the past, in ticks (100 ms). */
 const INTERP_DELAY_TICKS = 3;
@@ -42,6 +47,8 @@ export interface ViewPlayer {
   x: number;
   y: number;
   facing: 1 | -1;
+  hp?: number;
+  underwater?: boolean;
 }
 
 export interface SessionStatus {
@@ -56,6 +63,7 @@ export interface Session {
   /** The player this screen follows. */
   readonly localId: PlayerId;
   view(now: number): ViewPlayer[];
+  hoseView?(): HoseState;
   status(): SessionStatus;
   dispose(): void;
 }
@@ -159,11 +167,18 @@ export class FixedTicker {
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
 export function lerpPlayer(a: PlayerState | ViewPlayer, b: PlayerState | ViewPlayer, t: number): ViewPlayer {
-  return { id: b.id, x: lerp(a.x, b.x, t), y: lerp(a.y, b.y, t), facing: b.facing };
+  return {
+    id: b.id,
+    x: lerp(a.x, b.x, t),
+    y: lerp(a.y, b.y, t),
+    facing: b.facing,
+    hp: (b as PlayerState).hp,
+    underwater: (b as PlayerState).underwater,
+  };
 }
 
 export const snapshotOf = (players: readonly PlayerState[]): ViewPlayer[] =>
-  players.map((p) => ({ id: p.id, x: p.x, y: p.y, facing: p.facing }));
+  players.map((p) => ({ id: p.id, x: p.x, y: p.y, facing: p.facing, hp: p.hp, underwater: p.underwater }));
 
 export function frameFrom(source: InputSource, seq: number): InputFrame {
   const s = source.sample();
@@ -176,7 +191,11 @@ export class LocalSession implements Session {
   private prev = snapshotOf(this.world.state.players);
   private readonly ticker: FixedTicker;
 
-  constructor(sources: [InputSource, InputSource]) {
+  constructor(sources: [InputSource, InputSource], levelId = LEVEL_ID) {
+    if (levelId !== LEVEL_ID) {
+      this.world = createWorld(getLevel(levelId));
+      this.prev = snapshotOf(this.world.state.players);
+    }
     this.ticker = new FixedTicker(() => {
       this.prev = snapshotOf(this.world.state.players);
       stepWorld(this.world, [frameFrom(sources[0], 0), frameFrom(sources[1], 0)]);
@@ -188,6 +207,10 @@ export class LocalSession implements Session {
     return this.world.state.players.map((p, i) => lerpPlayer(this.prev[i]!, p, t));
   }
 
+  hoseView(): HoseState {
+    return this.world.state.hose;
+  }
+
   status(): SessionStatus {
     return { mode: "local", net: "local", peer: true };
   }
@@ -195,6 +218,12 @@ export class LocalSession implements Session {
   dispose() {
     this.ticker.stop();
   }
+}
+
+export type Connect = (events: NetEvents) => Transport;
+
+function newSave(): string {
+  return JSON.stringify({ version: 1, chapter: 0, level: LEVEL_ID, scrap: 0 });
 }
 
 export class HostSession implements Session {
@@ -214,7 +243,12 @@ export class HostSession implements Session {
     source: InputSource,
     name: string,
     connect: Connect = (events) => new NetClient(code, "host", events),
+    levelId = LEVEL_ID,
   ) {
+    if (levelId !== LEVEL_ID) {
+      this.world = createWorld(getLevel(levelId));
+      this.prev = snapshotOf(this.world.state.players);
+    }
     this.net = connect({
       onWelcome: (msg) => {
         this.peer = msg.peerPresent;
@@ -248,13 +282,20 @@ export class HostSession implements Session {
       }
       stepWorld(this.world, [frameFrom(source, 0), this.peer ? this.lastGuestInput : NO_INPUT]);
       // 20 snapshots a second: send on 2 of every 3 ticks.
-      if (this.world.state.tick % 3 !== 0) this.net.send(encodeSnapshot(this.world.state, this.ack));
+      if (this.world.state.tick % 3 !== 0) {
+        this.net.send(encodeSnapshot(this.world.state, this.ack));
+        this.net.send(encodeHose(this.world.state.hose));
+      }
     });
   }
 
   view(now: number): ViewPlayer[] {
     const t = this.ticker.alpha(now);
     return this.world.state.players.map((p, i) => lerpPlayer(this.prev[i]!, p, t));
+  }
+
+  hoseView(): HoseState {
+    return this.world.state.hose;
   }
 
   status(): SessionStatus {
@@ -290,7 +331,13 @@ export class GuestSession implements Session {
     source: InputSource,
     name: string,
     connect: Connect = (events) => new NetClient(code, "guest", events),
+    levelId = LEVEL_ID,
   ) {
+    if (levelId !== LEVEL_ID) {
+      this.world = createWorld(getLevel(levelId));
+      this.own = { ...this.world.state.players[1] };
+      this.prevOwn = { ...this.own };
+    }
     this.net = connect({
       onWelcome: (msg) => {
         this.peer = msg.peerPresent;
@@ -304,7 +351,18 @@ export class GuestSession implements Session {
       },
       onControl: () => {},
       onBinary: (buf) => {
-        if (messageType(buf) === MsgType.Snapshot) this.onSnapshot(decodeSnapshot(buf));
+        const type = messageType(buf);
+        if (type === MsgType.Snapshot) this.onSnapshot(decodeSnapshot(buf));
+        else if (type === MsgType.Hose) {
+          const snap = decodeHose(buf);
+          this.world.state.hose.pressure = snap.pressure;
+          this.world.state.hose.activeLength = snap.activeLength;
+          this.world.state.hose.snags = snap.snags;
+          this.world.state.hose.warning = snap.warning;
+          this.world.state.hose.suffocating = snap.suffocating;
+          this.world.state.hose.nodes = snap.nodes;
+          this.world.state.hose.signal = snap.signal;
+        }
       },
       onStatus: (s) => (this.netStatus = s),
     });
@@ -315,7 +373,7 @@ export class GuestSession implements Session {
       const frame = frameFrom(source, this.seq);
       this.history.push(frame);
       this.prevOwn = { ...this.own };
-      stepPlayer(this.own, frame, this.world.solids);
+      stepPlayer(this.own, frame, this.world.solids, this.world.level.water?.level);
       this.net.send(encodeInput(frame));
     });
   }
@@ -354,7 +412,7 @@ export class GuestSession implements Session {
     }
     const before = { x: this.own.x, y: this.own.y };
     this.own = { ...auth };
-    for (const h of this.history) stepPlayer(this.own, h, this.world.solids);
+    for (const h of this.history) stepPlayer(this.own, h, this.world.solids, this.world.level.water?.level);
     this.correction.x += before.x - this.own.x;
     this.correction.y += before.y - this.own.y;
     // A big error is a teleport, not jitter: snap.
@@ -385,41 +443,30 @@ export class GuestSession implements Session {
     return [...others, ownView].sort((a, b) => a.id - b.id);
   }
 
+  hoseView(): HoseState {
+    return this.world.state.hose;
+  }
+
   private interpolate(id: PlayerId, tick: number): ViewPlayer | undefined {
     for (let i = this.snapshots.length - 1; i > 0; i--) {
       const b = this.snapshots[i]!;
       const a = this.snapshots[i - 1]!;
-      if (a.tick > tick) continue;
+      if (tick < a.tick || tick > b.tick) continue;
       const pa = a.players.find((p) => p.id === id);
       const pb = b.players.find((p) => p.id === id);
-      if (!pa || !pb) return undefined;
-      const t = Math.min(1, (tick - a.tick) / Math.max(1, b.tick - a.tick));
-      return lerpPlayer(pa, pb, t);
+      if (!pa || !pb) return pb ?? pa;
+      const t = b.tick === a.tick ? 0 : (tick - a.tick) / (b.tick - a.tick);
+      return lerpPlayer(pa, pb, Math.max(0, Math.min(1, t)));
     }
-    const first = this.snapshots[0]?.players.find((p) => p.id === id);
-    return first && { ...first };
+    return this.snapshots.at(-1)?.players.find((p) => p.id === id);
   }
 
   status(): SessionStatus {
-    return { mode: "guest", net: this.netStatus, peer: this.peer && this.synced, code: this.code };
+    return { mode: "guest", net: this.netStatus, peer: this.peer, code: this.code };
   }
 
   dispose() {
     this.ticker.stop();
     this.net.close();
   }
-}
-
-/** Opens the link to the room. Tests and debug mode swap in a fake one. */
-export type Connect = (events: NetEvents) => Transport;
-
-/** The Duck save, first pass. GAME.md section 9. Game data only, never physics state. */
-function newSave() {
-  return {
-    saveVersion: 1,
-    chapter: 0,
-    checkpoint: "cp1",
-    players: { wren: { name: "Wren" }, cass: { name: "Cass" } },
-    createdAt: new Date().toISOString(),
-  };
 }

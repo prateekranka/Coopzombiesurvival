@@ -7,6 +7,9 @@
   --paper: #efe6cf;
   --wren: #ff9f43;
   --cass: #4aa3ff;
+  --safe: #2ec4b6;
+  --warn: #ff9f1c;
+  --danger: #e71d36;
   font-family: ui-rounded, "SF Pro Rounded", system-ui, -apple-system, sans-serif;
   color: var(--ink);
 }
@@ -95,7 +98,7 @@ button {
 .card {
   display: grid;
   gap: 14px;
-  width: min(420px, calc(100vw - 32px));
+  width: min(440px, calc(100vw - 32px));
   padding: 28px;
   border: 4px solid var(--ink);
   border-radius: 20px;
@@ -157,6 +160,18 @@ button {
   -webkit-user-select: text;
 }
 
+.level-toggle {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 14px;
+  border: 2px solid var(--ink);
+  border-radius: 10px;
+  background: rgb(255 255 255 / 0.7);
+  font-weight: 600;
+  font-size: 15px;
+}
+
 .status {
   min-height: 1.2em;
   margin: 0;
@@ -208,10 +223,124 @@ button {
   top: calc(max(12px, env(safe-area-inset-top)) + 52px);
   left: 50%;
   transform: translateX(-50%);
-  font-size: 16px;
-  padding: 4px 12px;
+  font-size: 15px;
+  font-weight: 600;
+  padding: 4px 14px;
   border-radius: 8px;
-  background: rgb(239 230 207 / 0.8);
+  background: rgb(239 230 207 / 0.88);
+  border: 2px solid rgb(29 23 18 / 0.15);
+  white-space: nowrap;
+}
+
+/* Hose & Air Pressure Gauge HUD */
+.gauge-panel {
+  position: absolute;
+  top: max(12px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 16px;
+  border: 3px solid var(--ink);
+  border-radius: 999px;
+  background: var(--paper);
+  box-shadow: 0 4px 12px rgb(0 0 0 / 0.12);
+}
+
+.gauge-label {
+  font-weight: 800;
+  font-size: 15px;
+  letter-spacing: 0.04em;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.gauge-bar-outer {
+  position: relative;
+  width: 140px;
+  height: 14px;
+  border: 2px solid var(--ink);
+  border-radius: 999px;
+  background: rgb(0 0 0 / 0.1);
+  overflow: hidden;
+}
+
+.gauge-safe-band {
+  position: absolute;
+  left: 35%;
+  width: 40%;
+  height: 100%;
+  background: rgb(46 196 182 / 0.28);
+}
+
+.gauge-bar-fill {
+  height: 100%;
+  width: 60%;
+  background: var(--safe);
+  transition: width 0.1s linear, background-color 0.2s ease;
+}
+
+.gauge-bar-fill.warning {
+  background: var(--warn);
+}
+
+.gauge-bar-fill.danger {
+  background: var(--danger);
+  animation: flash-danger 0.5s ease-in-out infinite alternate;
+}
+
+@keyframes flash-danger {
+  from { opacity: 0.6; }
+  to { opacity: 1; }
+}
+
+.gauge-psi {
+  font-size: 16px;
+  font-weight: 800;
+  min-width: 58px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.snag-badge {
+  padding: 2px 8px;
+  font-size: 13px;
+  font-weight: 800;
+  border-radius: 6px;
+  background: var(--danger);
+  color: #fff;
+  letter-spacing: 0.04em;
+  animation: pulse 1s infinite;
+}
+
+.signal-toast {
+  position: absolute;
+  top: calc(max(12px, env(safe-area-inset-top)) + 84px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 20px;
+  font-size: 17px;
+  font-weight: 800;
+  border: 3px solid var(--ink);
+  border-radius: 12px;
+  background: #fff;
+  color: var(--ink);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.2);
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.signal-toast.signal-pulse {
+  animation: bounce-in 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+@keyframes bounce-in {
+  from { transform: translate(-50%, -12px) scale(0.92); opacity: 0; }
+  to { transform: translate(-50%, 0) scale(1); opacity: 1; }
 }
 
 .partner-arrow {
@@ -306,8 +435,8 @@ button {
   position: absolute;
   right: max(24px, env(safe-area-inset-right));
   bottom: max(24px, env(safe-area-inset-bottom));
-  width: 260px;
-  height: 240px;
+  width: 290px;
+  height: 250px;
   pointer-events: none;
 }
 
@@ -330,31 +459,40 @@ button {
 .btn-jump {
   right: 0;
   bottom: 0;
-  width: 112px;
-  height: 112px;
+  width: 104px;
+  height: 104px;
   font-size: 20px;
 }
 
 .btn-attack {
-  right: 124px;
+  right: 114px;
   bottom: 8px;
-  width: 84px;
-  height: 84px;
+  width: 76px;
+  height: 76px;
 }
 
 .btn-use {
   right: 16px;
-  bottom: 124px;
-  width: 80px;
-  height: 80px;
+  bottom: 116px;
+  width: 76px;
+  height: 76px;
+  font-size: 14px;
+}
+
+.btn-interact {
+  right: 104px;
+  bottom: 96px;
+  width: 66px;
+  height: 66px;
+  font-size: 13px;
 }
 
 .btn-signal {
-  right: 112px;
-  bottom: 148px;
-  width: 60px;
-  height: 60px;
-  font-size: 14px;
+  right: 100px;
+  bottom: 172px;
+  width: 62px;
+  height: 62px;
+  font-size: 13px;
 }
 
 @media (orientation: portrait) and (pointer: coarse) {
@@ -398,106 +536,4 @@ button {
   border-radius: 999px;
   background: #ff2bd6;
   color: #fff;
-}
-
-.debug-overlay {
-  margin: 0;
-  padding: 6px 10px;
-  font: 13px/1.35 ui-monospace, "SF Mono", Menlo, monospace;
-  color: #fff;
-  background: rgb(29 23 18 / 0.75);
-  border-radius: 8px;
-  pointer-events: none;
-}
-
-.debug-panel {
-  /* Shrinks to the space left and scrolls inside it. */
-  min-height: 0;
-  flex: 0 1 auto;
-  width: min(320px, calc(100vw - 32px));
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  touch-action: pan-y;
-  padding: 12px 14px;
-  border: 3px solid var(--ink);
-  border-radius: 14px;
-  background: rgb(239 230 207 / 0.96);
-}
-
-.debug-panel section + section {
-  margin-top: 12px;
-  padding-top: 10px;
-  border-top: 2px dashed rgb(29 23 18 / 0.3);
-}
-
-.debug-panel h3 {
-  margin: 0 0 8px;
-  font-size: 16px;
-}
-
-.debug-panel label {
-  display: grid;
-  gap: 2px;
-  margin: 6px 0;
-}
-
-.debug-panel label.check {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.debug-panel label.changed > span {
-  color: #b0127f;
-  font-weight: 700;
-}
-
-.debug-panel output {
-  font-variant-numeric: tabular-nums;
-  opacity: 0.8;
-}
-
-.debug-panel input[type="range"] {
-  width: 100%;
-  min-height: 32px;
-}
-
-.debug-panel input[type="checkbox"] {
-  width: 22px;
-  height: 22px;
-}
-
-.debug-panel select,
-.debug-panel button {
-  min-height: 40px;
-  padding: 0 10px;
-  font: inherit;
-  border: 2px solid var(--ink);
-  border-radius: 10px;
-  background: #fff;
-}
-
-.debug-panel .row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 6px 0;
-}
-
-.debug-panel button.on {
-  background: var(--brass);
-  font-weight: 700;
-}
-
-.debug-panel .copy-out {
-  width: 100%;
-  font: 13px ui-monospace, Menlo, monospace;
-  user-select: text;
-  -webkit-user-select: text;
-}
-
-.debug-panel .keys {
-  margin: 10px 0 0;
-  font-size: 13px;
-  opacity: 0.75;
 }

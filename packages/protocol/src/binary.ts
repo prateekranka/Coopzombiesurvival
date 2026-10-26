@@ -2,11 +2,21 @@
 // Snapshots are quantized: positions in millimetres, speeds in cm/s.
 // Deltas against the last acked snapshot come later; at two players a full snapshot is 40 bytes.
 
-import type { InputFrame, PlayerId, PlayerState, WorldState } from "@lifeline/sim";
+import type {
+  HoseState,
+  InputFrame,
+  LineSignal,
+  PlayerId,
+  PlayerState,
+  ReceivedSignal,
+  Vec2D,
+  WorldState,
+} from "@lifeline/sim";
 
 export const MsgType = {
   Input: 1,
   Snapshot: 2,
+  Hose: 3,
 } as const;
 
 const INPUT_BYTES = 6;
@@ -86,10 +96,93 @@ export function decodeSnapshot(buf: ArrayBuffer): Snapshot {
       facing: flags & Flag.FacingLeft ? -1 : 1,
       coyote: v.getUint8(o + 14),
       jumpBuffer: v.getUint8(o + 15),
+      hp: 100,
+      underwater: false,
+      blowUpTicks: 0,
     });
     o += PLAYER_BYTES;
   }
   return { tick: v.getUint32(1), ack: v.getUint16(5), players };
+}
+
+export interface HoseSnapshot {
+  pressure: number;
+  activeLength: number;
+  snags: number;
+  warning: boolean;
+  suffocating: boolean;
+  nodes: Vec2D[];
+  signal?: LineSignal;
+  lastReceivedSignal?: ReceivedSignal;
+}
+
+export function encodeHose(hose: HoseState): ArrayBuffer {
+  const nodeCount = hose.nodes.length;
+  const HEADER_BYTES = 10;
+  const buf = new ArrayBuffer(HEADER_BYTES + nodeCount * 4);
+  const v = new DataView(buf);
+
+  v.setUint8(0, MsgType.Hose);
+  v.setUint16(1, clampInt(hose.pressure * 100, 0, 65535));
+  v.setUint16(3, clampInt(hose.activeLength * 100, 0, 65535));
+  v.setUint8(5, hose.snags & 0xff);
+  v.setUint8(6, (hose.warning ? 1 : 0) | (hose.suffocating ? 2 : 0));
+  v.setUint8(7, hose.signal ? hose.signal.pulls : 0);
+  v.setUint8(8, hose.signal ? (hose.signal.senderId as number) : 0);
+  v.setUint8(9, hose.signal ? clampInt(hose.signal.progress * 255, 0, 255) : 0);
+
+  let o = HEADER_BYTES;
+  for (const node of hose.nodes) {
+    v.setInt16(o, clampInt(node.x * 100, -32768, 32767));
+    v.setInt16(o + 2, clampInt(node.y * 100, -32768, 32767));
+    o += 4;
+  }
+
+  return buf;
+}
+
+export function decodeHose(buf: ArrayBuffer): HoseSnapshot {
+  const v = new DataView(buf);
+  if (v.getUint8(0) !== MsgType.Hose) throw new Error("Not a hose message");
+
+  const pressure = v.getUint16(1) / 100;
+  const activeLength = v.getUint16(3) / 100;
+  const snags = v.getUint8(5);
+  const flags = v.getUint8(6);
+  const signalPulls = v.getUint8(7);
+  const signalSender = v.getUint8(8) as PlayerId;
+  const signalProgress = v.getUint8(9) / 255;
+
+  let signal: LineSignal | undefined;
+  if (signalPulls > 0) {
+    signal = {
+      senderId: signalSender,
+      pulls: signalPulls,
+      progress: signalProgress,
+    };
+  }
+
+  const HEADER_BYTES = 10;
+  const nodeCount = Math.floor((v.byteLength - HEADER_BYTES) / 4);
+  const nodes: Vec2D[] = [];
+  let o = HEADER_BYTES;
+  for (let i = 0; i < nodeCount; i++) {
+    nodes.push({
+      x: v.getInt16(o) / 100,
+      y: v.getInt16(o + 2) / 100,
+    });
+    o += 4;
+  }
+
+  return {
+    pressure,
+    activeLength,
+    snags,
+    warning: (flags & 1) !== 0,
+    suffocating: (flags & 2) !== 0,
+    nodes,
+    signal,
+  };
 }
 
 export function messageType(buf: ArrayBuffer): number {

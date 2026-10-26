@@ -1,4 +1,4 @@
-// First-pass tuning values. GAME.md sections 6.1 and 6.2.
+// First-pass tuning values. GAME.md sections 6.1, 6.2, and 6.6.
 
 export const TICK_RATE = 30;
 export const DT = 1 / TICK_RATE;
@@ -12,6 +12,10 @@ export interface Tuning {
   gravity: number;
   /** m/s */
   walkSpeed: number;
+  /** m/s: GAME.md 6.2 under water (heavy boots) */
+  underwaterSpeed: number;
+  /** m/s²: submerged gravity for heavy boots */
+  underwaterGravity: number;
   /** m */
   jumpHeight: number;
   /** m/s */
@@ -26,11 +30,23 @@ export interface Tuning {
   jumpBufferTicks: number;
   /** Upward speed kept each tick after jump is released, 0 to 1. Lower gives shorter hops. */
   jumpCut: number;
+  /** m/s: rapid uncontrolled float upward during blow-up (>85 psi) */
+  blowUpSpeed: number;
+  /** m: standard hose length */
+  maxHoseLength: number;
+  /** psi/s: base air use */
+  airUseBase: number;
+  /** psi/s per metre depth */
+  airUsePerDepth: number;
+  /** psi added per pump stroke */
+  pumpAirPerStroke: number;
 }
 
 export const DEFAULT_TUNING: Readonly<Tuning> = Object.freeze({
   gravity: 20,
   walkSpeed: 4.5,
+  underwaterSpeed: 1.6,
+  underwaterGravity: 10,
   jumpHeight: 1.3,
   maxFallSpeed: 24,
   groundAccel: 45,
@@ -38,6 +54,11 @@ export const DEFAULT_TUNING: Readonly<Tuning> = Object.freeze({
   coyoteTicks: 3,
   jumpBufferTicks: 3,
   jumpCut: 0.6,
+  blowUpSpeed: 6.0,
+  maxHoseLength: 30,
+  airUseBase: 1.0,
+  airUsePerDepth: 0.12,
+  pumpAirPerStroke: 5.0,
 });
 
 /**

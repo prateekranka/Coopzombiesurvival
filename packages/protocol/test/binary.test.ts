@@ -1,7 +1,17 @@
 import { getLevel } from "@lifeline/content";
 import { Button, createWorld, stepWorld } from "@lifeline/sim";
 import { describe, expect, it } from "vitest";
-import { decodeInput, decodeSnapshot, encodeInput, encodeSnapshot, isRoomCode, randomRoomCode, seqNewer } from "../src";
+import {
+  decodeHose,
+  decodeInput,
+  decodeSnapshot,
+  encodeHose,
+  encodeInput,
+  encodeSnapshot,
+  isRoomCode,
+  randomRoomCode,
+  seqNewer,
+} from "../src";
 
 describe("input frames", () => {
   it("round-trips with quantized sticks", () => {
@@ -40,6 +50,33 @@ describe("snapshots", () => {
 
   it("rejects the wrong message type", () => {
     expect(() => decodeSnapshot(encodeInput({ seq: 1, moveX: 0, moveY: 0, buttons: 0 }))).toThrow();
+  });
+});
+
+describe("hose messages", () => {
+  it("round-trips hose state and signals", () => {
+    const world = createWorld(getLevel("m0-test-room"));
+    world.state.hose.pressure = 58.5;
+    world.state.hose.activeLength = 28.2;
+    world.state.hose.snags = 2;
+    world.state.hose.warning = true;
+    world.state.hose.signal = { senderId: 0, pulls: 3, progress: 0.45 };
+
+    const buf = encodeHose(world.state.hose);
+    // 10 header bytes + 16 nodes * 4 bytes = 74 bytes
+    expect(buf.byteLength).toBe(74);
+
+    const out = decodeHose(buf);
+    expect(out.pressure).toBeCloseTo(58.5, 1);
+    expect(out.activeLength).toBeCloseTo(28.2, 1);
+    expect(out.snags).toBe(2);
+    expect(out.warning).toBe(true);
+    expect(out.suffocating).toBe(false);
+    expect(out.nodes.length).toBe(16);
+    expect(out.signal).toBeDefined();
+    expect(out.signal!.senderId).toBe(0);
+    expect(out.signal!.pulls).toBe(3);
+    expect(out.signal!.progress).toBeCloseTo(0.45, 1);
   });
 });
 

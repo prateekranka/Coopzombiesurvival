@@ -1,18 +1,21 @@
 import * as THREE from "three/webgpu";
 import type { Level } from "@lifeline/content";
-import { PLAYER_HEIGHT, PLAYER_WIDTH, type PlayerId } from "@lifeline/sim";
+import { HOSE_NODE_COUNT, PLAYER_HEIGHT, PLAYER_WIDTH, type HoseState, type PlayerId } from "@lifeline/sim";
 import type { ViewPlayer } from "./session";
 
-// Placeholder art: flat shapes with ink outlines, in the Ink Wobble palette. GAME.md section 8.
-// Uses the WebGPU renderer, which falls back to WebGL2 when WebGPU is missing.
+// Art style: flat shapes with ink outlines, in the Ink Wobble palette. GAME.md section 8.
+// Uses WebGPU renderer, with automatic fallback to WebGL2.
 
 export const PALETTE = {
   sky: 0xcfc09a,
   shallow: 0x78a39c,
   deep: 0x263c3e,
+  waterTint: 0x1d4e56,
   brass: 0xd8a048,
+  brassGlow: 0xffd166,
   zombie: 0x8fa58a,
   ink: 0x1d1712,
+  snagRed: 0xef476f,
 } as const;
 
 export const PLAYER_COLORS: Record<PlayerId, number> = { 0: 0xff9f43, 1: 0x4aa3ff };
@@ -41,19 +44,33 @@ function capsuleShape(w: number, h: number): THREE.Shape {
   return s;
 }
 
-const basic = (color: number) => new THREE.MeshBasicNodeMaterial({ color });
+const basic = (color: number, opacity = 1, transparent = false) =>
+  new THREE.MeshBasicNodeMaterial({ color, opacity, transparent });
 
 export class Renderer {
   private readonly renderer: THREE.WebGPURenderer;
   private readonly scene = new THREE.Scene();
   private readonly camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
   private readonly players = new Map<PlayerId, THREE.Group>();
+  private readonly playerHelmets = new Map<PlayerId, THREE.Group>();
   private readonly ghosts = new Map<PlayerId, THREE.Group>();
   /** Debug mode switches. */
   readonly debug = { hitboxes: false, zoom: 1 };
   private readonly backdrop = new THREE.Group();
   private cam = { x: 0, y: 0, h: VIEW_HEIGHT };
   private hasCam = false;
+
+  // Hose and water rendering components
+  private hoseLine!: THREE.Line;
+  private hoseBackLine!: THREE.Line;
+  private hoseGeo!: THREE.BufferGeometry;
+  private hoseBackGeo!: THREE.BufferGeometry;
+  private hoseSignalMesh!: THREE.Mesh;
+  private snagMarkers: THREE.Mesh[] = [];
+  private waterSurfaceLine?: THREE.Line;
+  private waterOverlay?: THREE.Mesh;
+  private bubbles: { mesh: THREE.Mesh; vx: number; vy: number; baseLife: number; life: number }[] = [];
+  private bubbleGroup = new THREE.Group();
 
   private constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -63,12 +80,17 @@ export class Renderer {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.scene.background = new THREE.Color(PALETTE.sky);
     this.camera.position.z = 50;
+
     this.buildBackdrop();
     this.buildLevel();
+    this.buildWater();
+    this.buildHose();
+
     for (const id of [0, 1] as const) {
       this.players.set(id, this.buildPlayer(id));
       this.ghosts.set(id, this.buildGhost(id));
     }
+
     this.resize();
     window.addEventListener("resize", () => this.resize());
   }
@@ -85,13 +107,11 @@ export class Renderer {
   }
 
   private buildBackdrop() {
-    // Crooked buildings far behind the play plane, drawn with parallax.
     const [w] = this.level.size;
     let x = -10;
     let i = 0;
     while (x < w + 20) {
       const bw = 3 + ((i * 7) % 5);
-      // Low enough that the skyline shows under the sky.
       const bh = 3.5 + ((i * 13) % 9) / 2;
       const shape = new THREE.Shape();
       const lean = ((i % 3) - 1) * 0.4;
@@ -115,10 +135,10 @@ export class Renderer {
       const shape = new THREE.Shape(g.points.map(([x, y]) => new THREE.Vector2(x, y)));
       const fill = new THREE.Mesh(new THREE.ShapeGeometry(shape), basic(MATERIAL_COLORS[g.material] ?? 0x666666));
       this.scene.add(fill);
-      // WebGPURenderer has no LineLoop, so close the line by repeating the first point.
       const pts = [...g.points, g.points[0]!].map(([x, y]) => new THREE.Vector3(x, y, 0.1));
       this.scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), ink));
     }
+
     for (const cp of this.level.checkpoints) {
       const post = new THREE.Mesh(new THREE.PlaneGeometry(0.15, 2.2), basic(PALETTE.ink));
       post.position.set(cp.pos[0], cp.pos[1] + 1.1, -0.5);
@@ -126,6 +146,69 @@ export class Renderer {
       bell.position.set(cp.pos[0], cp.pos[1] + 2.2, -0.4);
       this.scene.add(post, bell);
     }
+  }
+
+  private buildWater() {
+    if (!this.level.water) return;
+    const [w] = this.level.size;
+    const wl = this.level.water.level;
+
+    // Underwater volumetric tint plane
+    const planeGeo = new THREE.PlaneGeometry(w + 20, wl);
+    const planeMat = basic(PALETTE.waterTint, 0.38, true);
+    this.waterOverlay = new THREE.Mesh(planeGeo, planeMat);
+    this.waterOverlay.position.set(w / 2, wl / 2, 4);
+    this.scene.add(this.waterOverlay);
+
+    // Glowing waterline
+    const surfacePts = [new THREE.Vector3(-10, wl, 4.1), new THREE.Vector3(w + 10, wl, 4.1)];
+    const surfaceGeo = new THREE.BufferGeometry().setFromPoints(surfacePts);
+    this.waterSurfaceLine = new THREE.Line(surfaceGeo, new THREE.LineBasicNodeMaterial({ color: PALETTE.shallow }));
+    this.scene.add(this.waterSurfaceLine);
+
+    // Underwater bubbles pool
+    for (let i = 0; i < 20; i++) {
+      const r = 0.04 + Math.random() * 0.05;
+      const mesh = new THREE.Mesh(new THREE.CircleGeometry(r, 8), basic(0xdcf8f6, 0.6, true));
+      mesh.visible = false;
+      this.bubbleGroup.add(mesh);
+      this.bubbles.push({
+        mesh,
+        vx: (Math.random() - 0.5) * 0.4,
+        vy: 1.0 + Math.random() * 1.5,
+        baseLife: 2.0 + Math.random() * 2.0,
+        life: Math.random() * 2.0,
+      });
+    }
+    this.bubbleGroup.position.z = 4.05;
+    this.scene.add(this.bubbleGroup);
+  }
+
+  private buildHose() {
+    const pts = Array.from({ length: HOSE_NODE_COUNT }, () => new THREE.Vector3(0, 0, 0.8));
+    this.hoseGeo = new THREE.BufferGeometry().setFromPoints(pts);
+    this.hoseLine = new THREE.Line(this.hoseGeo, new THREE.LineBasicNodeMaterial({ color: PALETTE.brassGlow }));
+
+    const backPts = Array.from({ length: HOSE_NODE_COUNT }, () => new THREE.Vector3(0, 0, 0.79));
+    this.hoseBackGeo = new THREE.BufferGeometry().setFromPoints(backPts);
+    this.hoseBackLine = new THREE.Line(this.hoseBackGeo, new THREE.LineBasicNodeMaterial({ color: PALETTE.ink }));
+
+    // Signal pulse indicator
+    this.hoseSignalMesh = new THREE.Mesh(new THREE.CircleGeometry(0.2, 12), basic(0x00f5d4));
+    this.hoseSignalMesh.position.z = 0.85;
+    this.hoseSignalMesh.visible = false;
+
+    // Snag corner markers pool (up to 3)
+    for (let i = 0; i < 3; i++) {
+      const m = new THREE.Mesh(new THREE.CircleGeometry(0.18, 4), basic(PALETTE.snagRed));
+      m.rotation.z = Math.PI / 4; // diamond shape
+      m.position.z = 0.86;
+      m.visible = false;
+      this.snagMarkers.push(m);
+      this.scene.add(m);
+    }
+
+    this.scene.add(this.hoseBackLine, this.hoseLine, this.hoseSignalMesh);
   }
 
   private buildPlayer(id: PlayerId): THREE.Group {
@@ -143,7 +226,23 @@ export class Renderer {
     const pupil = new THREE.Mesh(new THREE.CircleGeometry(0.045, 10), basic(PALETTE.ink));
     pupil.position.set(0.03, 0, 0.01);
     eye.add(pupil);
-    group.add(outline, body, eye, this.hitbox(0xff2bd6));
+
+    // Diving Gear (Brass Helmet & Boots) for Diver (id 0)
+    const helmetGroup = new THREE.Group();
+    const brassDome = new THREE.Mesh(new THREE.CircleGeometry(0.34, 16), basic(PALETTE.brass));
+    brassDome.position.set(0, PLAYER_HEIGHT - 0.3, 0.03);
+    const glassFace = new THREE.Mesh(new THREE.CircleGeometry(0.18, 12), basic(0x6ee7b7, 0.85, true));
+    glassFace.position.set(0.12, PLAYER_HEIGHT - 0.3, 0.04);
+    const bootLeft = new THREE.Mesh(new THREE.PlaneGeometry(0.25, 0.22), basic(PALETTE.brass));
+    bootLeft.position.set(-0.16, 0.1, 0.03);
+    const bootRight = new THREE.Mesh(new THREE.PlaneGeometry(0.25, 0.22), basic(PALETTE.brass));
+    bootRight.position.set(0.16, 0.1, 0.03);
+
+    helmetGroup.add(brassDome, glassFace, bootLeft, bootRight);
+    helmetGroup.visible = false;
+    this.playerHelmets.set(id, helmetGroup);
+
+    group.add(outline, body, eye, helmetGroup, this.hitbox(0xff2bd6));
     group.position.z = 1 + id * 0.1;
     this.scene.add(group);
     return group;
@@ -209,8 +308,6 @@ export class Renderer {
       this.cam.y += (ty - this.cam.y) * 0.08;
       this.cam.h += (th - this.cam.h) * 0.05;
     }
-    // Keep the view inside the level. Clamp after smoothing, so a zoom change cannot show
-    // what is below the floor.
     const [lw, lh] = this.level.size;
     const halfW = (this.cam.h * aspect) / 2;
     this.cam.x = halfW * 2 >= lw ? lw / 2 : Math.min(Math.max(this.cam.x, halfW), lw - halfW);
@@ -234,7 +331,70 @@ export class Renderer {
     return { x: ((v.x + 1) / 2) * this.canvas.clientWidth, y: ((1 - v.y) / 2) * this.canvas.clientHeight };
   }
 
-  render(view: ViewPlayer[], followId: PlayerId, ghosts: ViewPlayer[] = []) {
+  private updateHose(hose?: HoseState) {
+    if (!hose || !hose.nodes || hose.nodes.length !== HOSE_NODE_COUNT) return;
+
+    const pos = this.hoseGeo.attributes.position as THREE.BufferAttribute;
+    const backPos = this.hoseBackGeo.attributes.position as THREE.BufferAttribute;
+
+    for (let i = 0; i < HOSE_NODE_COUNT; i++) {
+      const n = hose.nodes[i]!;
+      pos.setXYZ(i, n.x, n.y, 0.8);
+      backPos.setXYZ(i, n.x, n.y - 0.03, 0.79);
+    }
+    pos.needsUpdate = true;
+    backPos.needsUpdate = true;
+
+    // Line signal pulse animation
+    if (hose.signal) {
+      this.hoseSignalMesh.visible = true;
+      const idxF = hose.signal.progress * (HOSE_NODE_COUNT - 1);
+      const i0 = Math.floor(idxF);
+      const i1 = Math.min(HOSE_NODE_COUNT - 1, i0 + 1);
+      const frac = idxF - i0;
+      const n0 = hose.nodes[i0]!;
+      const n1 = hose.nodes[i1]!;
+      this.hoseSignalMesh.position.set(n0.x + (n1.x - n0.x) * frac, n0.y + (n1.y - n0.y) * frac, 0.85);
+    } else {
+      this.hoseSignalMesh.visible = false;
+    }
+
+    // Snag markers
+    for (let i = 0; i < this.snagMarkers.length; i++) {
+      const marker = this.snagMarkers[i]!;
+      if (hose.snagPoints && i < hose.snagPoints.length) {
+        const pt = hose.snagPoints[i]!;
+        marker.position.set(pt.x, pt.y, 0.86);
+        marker.visible = true;
+      } else {
+        marker.visible = false;
+      }
+    }
+  }
+
+  private updateBubbles(view: ViewPlayer[], dt: number) {
+    if (!this.level.water) return;
+    const wl = this.level.water.level;
+    const diver = view.find((p) => p.id === 0);
+
+    for (const b of this.bubbles) {
+      b.life -= dt;
+      if (b.life <= 0 && diver && (diver.underwater || diver.y < wl)) {
+        b.life = b.baseLife;
+        b.mesh.position.set(diver.x + (Math.random() - 0.5) * 0.3, diver.y + PLAYER_HEIGHT - 0.2, 4.05);
+        b.mesh.visible = true;
+      }
+      if (b.mesh.visible) {
+        b.mesh.position.x += b.vx * dt;
+        b.mesh.position.y += b.vy * dt;
+        if (b.mesh.position.y >= wl) {
+          b.mesh.visible = false;
+        }
+      }
+    }
+  }
+
+  render(view: ViewPlayer[], followId: PlayerId, ghosts: ViewPlayer[] = [], hose?: HoseState, dt = 0.016) {
     for (const [id, group] of this.players) {
       const p = view.find((v) => v.id === id);
       group.visible = !!p;
@@ -243,12 +403,22 @@ export class Renderer {
       group.position.y = p.y;
       group.scale.x = p.facing;
       group.getObjectByName("hitbox")!.visible = this.debug.hitboxes;
+
+      // Show brass diving helmet on Wren (id 0) when diving or underwater
+      const helmet = this.playerHelmets.get(id);
+      if (helmet) {
+        helmet.visible = id === 0 && (p.underwater || (this.level.water !== undefined && p.y < this.level.water.level + 1.0));
+      }
     }
+
     for (const [id, group] of this.ghosts) {
       const g = ghosts.find((v) => v.id === id);
       group.visible = !!g;
       if (g) group.position.set(g.x, g.y, 2);
     }
+
+    this.updateHose(hose);
+    this.updateBubbles(view, dt);
     this.updateCamera(view, followId);
     this.renderer.render(this.scene, this.camera);
   }
